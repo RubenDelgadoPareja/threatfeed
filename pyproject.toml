@@ -1,0 +1,13 @@
+[project]
+name = "threatfeed"
+version = "0.1.0"
+description = "Threat intelligence pipeline that ingests public IoC feeds, normalizes and deduplicates them into PostgreSQL, and answers 'is this indicator known malicious?' over a REST API."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+    "sqlalchemy>=2.0.52",
+    "psycopg[binary]>=3.3.5",
+    "pydantic-settings>=2.15.0",
+    "alembic>=1.19.2",
+]
