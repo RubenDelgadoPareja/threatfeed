@@ -1,0 +1,25 @@
+# Local development environment. Phase 1: PostgreSQL only.
+# Phase 3 adds api, worker, beat and redis to this same file.
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-threatfeed}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-threatfeed}
+      POSTGRES_DB: ${POSTGRES_DB:-threatfeed}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # INTERVIEW: a named volume survives `docker compose down`; only `down -v` wipes it.
+      # postgres:18 moved its data VOLUME from /var/lib/postgresql/data to /var/lib/postgresql.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      # INTERVIEW: "container started" is not "ready to accept connections"; pg_isready checks the latter.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
