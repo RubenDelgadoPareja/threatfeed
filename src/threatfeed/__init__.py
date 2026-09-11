@@ -1,0 +1,1 @@
+"""ThreatFeed: a threat intelligence pipeline that aggregates public IoC feeds."""
