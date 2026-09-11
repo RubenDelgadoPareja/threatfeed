@@ -24,3 +24,23 @@ build-backend = "uv_build"
 
 [tool.pytest]
 testpaths = ["tests"]
+
+# Alembic reads its configuration from here (no alembic.ini). The database URL is NOT stored
+# in any file: env.py takes it from threatfeed.config.Settings, like the app does.
+[tool.alembic]
+script_location = "%(here)s/src/threatfeed/db/migrations"
+# Timestamped file names, so migrations sort chronologically like Rails' db/migrate/.
+file_template = "%%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s"
+
+# Generated migration files come out lint-clean and formatted.
+[[tool.alembic.post_write_hooks]]
+name = "ruff-fix"
+type = "module"
+module = "ruff"
+options = "check --fix REVISION_SCRIPT_FILENAME"
+
+[[tool.alembic.post_write_hooks]]
+name = "ruff-format"
+type = "module"
+module = "ruff"
+options = "format REVISION_SCRIPT_FILENAME"
