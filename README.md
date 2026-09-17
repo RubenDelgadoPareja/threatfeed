@@ -116,6 +116,9 @@ uv run python -m threatfeed.ingest urlhaus   # first ingestion
 uv run uvicorn threatfeed.main:app --reload  # API on http://localhost:8000 (docs at /docs)
 ```
 
+Today the scaffold brings up the database and serves `GET /health`; migrations and the ingestor
+land with the next [roadmap](#roadmap) items.
+
 Development:
 
 ```bash
@@ -124,6 +127,8 @@ uv run ruff check . && uv run ruff format --check .
 ```
 
 ## Project layout
+
+Target layout; directories appear as the roadmap advances.
 
 ```
 src/threatfeed/
@@ -135,12 +140,19 @@ src/threatfeed/
 ├── ingest/       # one ingestor per feed
 └── api/          # routers
 tests/
+docs/agents/      # conventions for coding agents: issue tracker, triage labels, domain docs
 ```
 
 ## Roadmap
 
-- [ ] **Phase 1: backend.** Scaffold · models and first migration · URLhaus ingestor ·
-  REST API · Feodo Tracker ingestor on a shared `BaseIngestor` · tests.
+- [ ] **Phase 1: backend.**
+  - [x] Scaffold: `src/` layout, Docker Compose with PostgreSQL 18, typed settings, Alembic wired
+    to the app settings, FastAPI app with lifespan and `GET /health`, pytest + ruff.
+  - [ ] Models and first migration (`indicators`, `ingest_runs`).
+  - [ ] URLhaus ingestor (`python -m threatfeed.ingest urlhaus`).
+  - [ ] REST API: `/check`, `/indicators`, `/stats`.
+  - [ ] Feodo Tracker ingestor on a shared `BaseIngestor`.
+  - [ ] Tests: parser fixtures from real CSV excerpts, API against a test database.
 - [ ] **Phase 2: applied security.** GeoIP / ASN enrichment (MaxMind GeoLite2) · multi-source
   confidence score · `POST /analyze/logs` to match an nginx access log against the indicators,
   parsed as a stream.
