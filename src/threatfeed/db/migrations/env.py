@@ -16,9 +16,7 @@ from threatfeed.db.base import Base
 # before autogenerate compares it against the live schema.
 
 # No alembic.ini => no fileConfig(); a minimal setup keeps "Running upgrade ..." messages visible.
-logging.basicConfig(
-    level=logging.INFO, format="%(levelname)-5.5s [%(name)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)-5.5s [%(name)s] %(message)s")
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 # INTERVIEW: autogenerate diffs Base.metadata against the live database. It detects added or

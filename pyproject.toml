@@ -25,6 +25,15 @@ build-backend = "uv_build"
 [tool.pytest]
 testpaths = ["tests"]
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes (defaults) · I: import sorting · UP: modernize syntax for py312
+# B: bugbear (likely bugs) · SIM: simplify (needless complexity)
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
 # Alembic reads its configuration from here (no alembic.ini). The database URL is NOT stored
 # in any file: env.py takes it from threatfeed.config.Settings, like the app does.
 [tool.alembic]
