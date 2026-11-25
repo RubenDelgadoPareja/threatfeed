@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from threatfeed.api.router import api_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -20,13 +22,4 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Liveness probe: the process is up and answering HTTP."""
-    return {"status": "ok"}
-
-
-# INTERVIEW: FastAPI runs plain `def` endpoints in a threadpool, so synchronous DB calls do not
-# block the event loop; `async def` endpoints must never do blocking I/O.
+app.include_router(api_router)

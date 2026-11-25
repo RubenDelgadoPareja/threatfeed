@@ -91,10 +91,15 @@ a crash leaves evidence.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /check/{value}` | Is this indicator known? Returns type, sources, first and last seen |
+| `GET /check?value=...` | Is this indicator known? Returns type, sources, first and last seen |
 | `GET /indicators?type=&limit=&offset=` | Paginated listing, optionally filtered by type |
 | `GET /stats` | Totals per type and per source |
 | `GET /health` | Liveness check |
+
+`/check` infers the type (IP, domain, URL, MD5 or SHA256) and normalizes the value with the same
+rules used at ingestion; it returns **404** when the value is valid but unknown and **422** when it
+cannot be classified. `/indicators` returns `{items, total, limit, offset}` (default 50, max 200,
+newest first), and `/stats` returns `{total, by_type, by_source}` with every type present.
 
 ## Stack
 
@@ -129,8 +134,8 @@ selects the export file (`recent.csv` by default); other exports, such as the fu
 in your abuse.ch account. Add `--limit N` to ingest only the first N rows, and rely on the exit
 code: 0 if the run ended `succeeded`, 1 if it ended `failed`.
 
-Today the schema is migrated, the URLhaus ingestor runs end to end and the API serves
-`GET /health`; the remaining endpoints land with the next [roadmap](#roadmap) items.
+Today the schema is migrated, the URLhaus ingestor runs end to end and the API serves `/check`,
+`/indicators`, `/stats` and `/health`; the Feodo Tracker ingestor is next.
 
 Development:
 
@@ -141,19 +146,21 @@ uv run ruff check . && uv run ruff format --check .
 
 ## Project layout
 
-Target layout; directories appear as the roadmap advances.
-
 ```
 src/threatfeed/
-├── main.py       # FastAPI application
-├── config.py     # settings (pydantic-settings, .env)
-├── db/           # declarative base, engine/session, Alembic migrations
-├── models/       # SQLAlchemy models
-├── schemas/      # Pydantic schemas (API in/out)
-├── ingest/       # one ingestor per feed
-└── api/          # routers
+├── main.py             # FastAPI app and router wiring
+├── config.py           # settings (pydantic-settings, .env)
+├── classification.py   # infer the type of an incoming value and normalize it
+├── normalize.py        # URL canonicalization shared by ingestion and lookups
+├── db/                 # declarative base, engine/session, Alembic migrations
+├── models/             # SQLAlchemy models
+├── schemas/            # Pydantic response schemas
+├── ingest/             # one ingestor per feed
+└── api/                # routers
 tests/
-docs/agents/      # conventions for coding agents: issue tracker, triage labels, domain docs
+├── fixtures/           # real CSV excerpts
+└── conftest.py         # test database, transaction rollback, seeded indicators
+docs/agents/            # conventions for coding agents: issue tracker, triage labels, domain docs
 ```
 
 ## Roadmap
@@ -163,9 +170,9 @@ docs/agents/      # conventions for coding agents: issue tracker, triage labels,
     to the app settings, FastAPI app with lifespan and `GET /health`, pytest + ruff.
   - [x] Models and first migration (`indicators`, `indicator_sources`, `ingest_runs`).
   - [x] URLhaus ingestor (`python -m threatfeed.ingest urlhaus`).
-  - [ ] REST API: `/check`, `/indicators`, `/stats`.
+  - [x] REST API: `/check`, `/indicators`, `/stats`.
   - [ ] Feodo Tracker ingestor on a shared `BaseIngestor`.
-  - [ ] Tests: parser fixtures from real CSV excerpts, API against a test database.
+  - [x] Tests: parser fixtures from real CSV excerpts, API against a test database.
 - [ ] **Phase 2: applied security.** GeoIP / ASN enrichment (MaxMind GeoLite2) · multi-source
   confidence score · `POST /analyze/logs` to match an nginx access log against the indicators,
   parsed as a stream.
@@ -189,6 +196,11 @@ Short version; detailed notes will grow with the project.
   converge. All-or-nothing would mean one bad row discards an entire download.
 - **A run that discards more than 10% of its rows fails.** Otherwise a feed format change looks
   like a healthy ingestion that silently imported a fraction of the data.
+- **`/check` takes `?value=` and classifies it.** URLs contain `/` and `?`, so a path parameter
+  would force double encoding; and the caller should not have to declare the type. The value is
+  normalized with the same code as ingestion, or lookups miss on a trailing dot or default port.
+- **Malformed input is 422; a valid but unknown indicator is 404.** Keeping the two cases
+  distinguishable matters when debugging why a lookup "did not find anything".
 - **Synchronous SQLAlchemy.** FastAPI runs plain `def` endpoints in a threadpool, so sync database
   calls do not block the event loop, and the phase 3 Celery workers are synchronous anyway.
   Async would add complexity without a measurable gain at this scale.

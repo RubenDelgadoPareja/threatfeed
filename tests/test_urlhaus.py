@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from threatfeed.ingest.errors import IngestError
-from threatfeed.ingest.normalize import InvalidUrl
 from threatfeed.ingest.urlhaus import InvalidRow, export_url, iter_rows, parse_row, redact_url
+from threatfeed.normalize import InvalidUrl
 
 FIXTURE = Path(__file__).parent / "fixtures" / "urlhaus_recent.csv"
 NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)

@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session
 
 from threatfeed.config import Settings
 from threatfeed.ingest.errors import IngestError
-from threatfeed.ingest.normalize import normalize_url
 from threatfeed.ingest.run import track_run
 from threatfeed.models import Indicator, IndicatorSource, IndicatorType, IngestRun
+from threatfeed.normalize import normalize_url
 
 logger = logging.getLogger(__name__)
 

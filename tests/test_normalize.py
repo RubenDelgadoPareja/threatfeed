@@ -1,6 +1,6 @@
 import pytest
 
-from threatfeed.ingest.normalize import InvalidUrl, normalize_url
+from threatfeed.normalize import InvalidUrl, normalize_url
 
 
 @pytest.mark.parametrize(
