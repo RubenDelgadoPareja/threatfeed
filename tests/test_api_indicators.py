@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from threatfeed.models import Indicator, IPEnrichment
+from threatfeed.cache import CheckCache
+from threatfeed.models import Indicator, IndicatorSource, IndicatorType, IPEnrichment
 
 
 def test_check_normalizes_urls_and_returns_provenance(
@@ -134,3 +137,61 @@ def test_stats_cover_every_type_and_source(
         },
         "by_source": {"feodotracker": 2, "urlhaus": 2},
     }
+
+
+def test_check_uses_the_cache_until_it_is_invalidated(
+    api_client: TestClient,
+    seeded_indicators: list[Indicator],
+    db_session: Session,
+    check_cache: CheckCache,
+) -> None:
+    assert api_client.get("/check", params={"value": "1.2.3.4"}).status_code == 200
+
+    db_session.delete(seeded_indicators[1])
+    db_session.flush()
+
+    assert api_client.get("/check", params={"value": "1.2.3.4"}).status_code == 200
+
+    check_cache.invalidate()
+
+    assert api_client.get("/check", params={"value": "1.2.3.4"}).status_code == 404
+
+
+def test_check_caches_negative_lookups_until_invalidation(
+    api_client: TestClient,
+    db_session: Session,
+    check_cache: CheckCache,
+) -> None:
+    value = "https://fresh.example/x"
+    assert api_client.get("/check", params={"value": value}).status_code == 404
+
+    now = datetime.now(UTC)
+    indicator = Indicator(
+        type=IndicatorType.URL,
+        value=value,
+        first_seen=now,
+        last_seen=now,
+        raw={},
+    )
+    indicator.sources = [IndicatorSource(feed="urlhaus", first_seen=now, last_seen=now)]
+    db_session.add(indicator)
+    db_session.flush()
+
+    assert api_client.get("/check", params={"value": value}).status_code == 404
+
+    check_cache.invalidate()
+
+    assert api_client.get("/check", params={"value": value}).status_code == 200
+
+
+def test_check_ignores_an_incompatible_cached_payload(
+    api_client: TestClient,
+    seeded_indicators: list[Indicator],
+    check_cache: CheckCache,
+) -> None:
+    check_cache.set(IndicatorType.IP, "1.2.3.4", {"unexpected": "shape"})
+
+    response = api_client.get("/check", params={"value": "1.2.3.4"})
+
+    assert response.status_code == 200
+    assert response.json()["value"] == "1.2.3.4"

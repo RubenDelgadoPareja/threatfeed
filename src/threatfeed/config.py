@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # Celery broker and scheduling defaults (UTC).
     redis_url: str = "redis://localhost:6379/0"
+    check_cache_ttl_seconds: int = Field(default=300, ge=1)
     urlhaus_interval_minutes: int = Field(default=60, ge=1)
     threatfox_schedule_hour: int = Field(default=0, ge=0, le=23)
     threatfox_schedule_minute: int = Field(default=30, ge=0, le=59)

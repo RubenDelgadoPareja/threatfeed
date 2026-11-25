@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy.exc import OperationalError
 
+from threatfeed.cache import invalidate_check_cache
 from threatfeed.celery_app import app
 from threatfeed.config import get_settings
 from threatfeed.db.session import get_session_factory
@@ -23,7 +24,10 @@ def ingest_feed(self, feed: str, limit: int | None = None) -> str:
     try:
         geoip = GeoIP.from_settings(settings)
         with get_session_factory()() as session:
-            started = run_feed(session, feed, settings, geoip, limit=limit)
+            try:
+                started = run_feed(session, feed, settings, geoip, limit=limit)
+            finally:
+                invalidate_check_cache()
 
         if not started:
             logger.warning("%s is already running; task skipped", feed)

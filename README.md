@@ -11,7 +11,7 @@
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
 **Status:** phase 2 (applied security) complete; phase 3 (distributed) in progress
-(scheduling, workers and full compose done; cache and rate limiting pending). See the
+(scheduling, workers, full compose and cache done; rate limiting pending). See the
 [roadmap](#roadmap).
 
 ## Why
@@ -118,6 +118,11 @@ report the indicator plus how fresh the latest report is. It is computed on read
 They also include `geo: {country_code, country_name, asn, as_org}` for enriched IP indicators,
 and `null` for everything else.
 
+`/check` is cached in Redis under a versioned namespace. Every ingestion increments the version
+key, so invalidation is O(1) and does not need a `SCAN`; old entries expire by TTL (300 s by
+default). Hits and negative lookups are both cached. If Redis is unavailable, the endpoint falls
+back to PostgreSQL and only logs a warning.
+
 ### Log analysis
 
 `POST /analyze/logs` takes a multipart file in nginx `combined` format and streams it line by
@@ -142,7 +147,7 @@ capped at 10 MB (413 above that) and at 100 matches by default (max 1000).
 | ORM / migrations | SQLAlchemy 2 (sync) + Alembic | Explicit SQL model, versioned schema changes |
 | Database | PostgreSQL 18 | `jsonb`, `timestamptz`, native upsert |
 | GeoIP / ASN | `geoip2` + MMDB | Local lookups, no per-request network call; GeoLite2 or DB-IP Lite |
-| Queue / scheduling | Celery + Redis | Scheduled ingestion, retries, one run per feed; Redis will also back the `/check` cache |
+| Queue / scheduling | Celery + Redis | Scheduled ingestion, retries, one run per feed; Redis also backs the versioned `/check` cache |
 | Driver | psycopg 3 | Modern, actively maintained Postgres driver |
 | Config | pydantic-settings | Typed settings from environment / `.env`, 12-factor style |
 | Tooling | uv · pytest · ruff | Fast, reproducible installs; tests; lint + format in one tool |
@@ -174,8 +179,9 @@ The API is on `http://localhost:8000`. Beat schedules URLhaus every 60 minutes a
 daily at 00:30 UTC (the export quota resets at 00:00). Both are configurable in `.env` through
 `URLHAUS_INTERVAL_MINUTES`, `THREATFOX_SCHEDULE_HOUR` and `THREATFOX_SCHEDULE_MINUTE`. The
 worker and Beat share `.cache/` through a bind mount, so the ThreatFox ZIP and GeoIP files are
-reused inside the containers. For local development you can run only the infrastructure and
-start the worker and Beat yourself:
+reused inside the containers. The `/check` cache TTL is `CHECK_CACHE_TTL_SECONDS` (300 by
+default). For local development you can run only the infrastructure and start the worker and
+Beat yourself:
 
 ```bash
 uv run celery -A threatfeed.celery_app worker --loglevel=INFO
@@ -212,8 +218,9 @@ New IPs are enriched during ingestion. The examples use DB-IP Lite (CC BY 4.0); 
 through the same reader and only changes the paths.
 
 Today both ingestors run end to end, the distributed stack schedules them through Celery, the
-API serves `/check`, `/indicators`, `/stats`, `/analyze/logs` and `/health`, and IPs carry
-country and ASN. Remaining in phase 3: the Redis cache for `/check` and rate limiting.
+API serves `/check`, `/indicators`, `/stats`, `/analyze/logs` and `/health`, IPs carry country
+and ASN, and `/check` is cached with versioned invalidation. Remaining in phase 3: rate
+limiting.
 
 Development:
 
@@ -267,8 +274,8 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] Retries with exponential backoff.
   - [x] Idempotent tasks: upsert plus a PostgreSQL advisory lock per feed.
   - [x] Full Docker Compose: database, Redis, API, worker and Beat.
+  - [x] Redis cache for `/check` with invalidation after each ingestion.
   - [ ] Rate limiting.
-  - [ ] Redis cache for `/check` with invalidation after each ingestion.
 
 ## Design decisions
 
@@ -298,6 +305,9 @@ Short version; detailed notes will grow with the project.
 - **Retries are classified.** Transient network and database errors retry with exponential
   backoff; 429s, auth failures and malformed feeds do not, because retrying them only burns the
   provider's quota or repeats the same mistake.
+- **The `/check` cache is versioned, not scanned.** Each ingestion increments a version key and
+  entries are namespaced by it, so invalidation is O(1) and old keys expire by TTL. Negative
+  lookups are cached too; a Redis outage falls back to PostgreSQL instead of failing the API.
 - **One `BaseIngestor`, two feeds.** Download and row mapping differ; batching, upsert,
   provenance, counters and the malformed-row guard are shared rather than copied.
 - **`/check` takes `?value=` and classifies it.** URLs contain `/` and `?`, so a path parameter

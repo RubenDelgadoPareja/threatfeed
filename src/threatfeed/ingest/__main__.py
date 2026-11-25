@@ -4,6 +4,7 @@ import argparse
 import logging
 import sys
 
+from threatfeed.cache import invalidate_check_cache
 from threatfeed.config import get_settings
 from threatfeed.db.session import get_session_factory
 from threatfeed.geoip import GeoIP
@@ -44,7 +45,10 @@ def main(argv: list[str] | None = None) -> int:
         settings = get_settings()
         geoip = GeoIP.from_settings(settings)
         with get_session_factory()() as session:
-            started = run_feed(session, args.feed, settings, geoip, limit=args.limit)
+            try:
+                started = run_feed(session, args.feed, settings, geoip, limit=args.limit)
+            finally:
+                invalidate_check_cache()
         if not started:
             logger.warning("%s is already running; skipping this invocation", args.feed)
     except IngestError as exc:

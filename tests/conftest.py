@@ -9,6 +9,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
+from threatfeed.cache import CheckCache, get_check_cache
 from threatfeed.config import get_settings
 from threatfeed.db.base import Base
 from threatfeed.db.session import get_db
@@ -16,6 +17,29 @@ from threatfeed.main import app
 from threatfeed.models import Indicator, IndicatorSource, IndicatorType
 
 TEST_DB_SUFFIX = "_test"
+
+
+class FakeRedis:
+    """Minimal in-memory client for the cache protocol; no fakeredis dependency."""
+
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
+        self.last_ex: int | None = None
+
+    def get(self, key: str) -> str | None:
+        return self.data.get(key)
+
+    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool | None:
+        if nx and key in self.data:
+            return None
+        self.data[key] = value
+        self.last_ex = ex
+        return True
+
+    def incr(self, key: str) -> int:
+        value = int(self.data.get(key, "0")) + 1
+        self.data[key] = str(value)
+        return value
 
 
 @pytest.fixture
@@ -75,13 +99,19 @@ def db_session(test_engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture
-def api_client(db_session: Session) -> Iterator[TestClient]:
+def check_cache() -> CheckCache:
+    return CheckCache(FakeRedis(), ttl_seconds=300)
+
+
+@pytest.fixture
+def api_client(db_session: Session, check_cache: CheckCache) -> Iterator[TestClient]:
     """HTTP client whose `get_db` dependency returns the test transaction's session."""
 
     def override_get_db() -> Iterator[Session]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_check_cache] = lambda: check_cache
     try:
         with TestClient(app) as c:
             yield c
