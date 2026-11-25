@@ -9,6 +9,12 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
+from threatfeed.api.rate_limit import (
+    RateLimiter,
+    RateLimits,
+    get_rate_limiter,
+    get_rate_limits,
+)
 from threatfeed.cache import CheckCache, get_check_cache
 from threatfeed.config import get_settings
 from threatfeed.db.base import Base
@@ -40,6 +46,19 @@ class FakeRedis:
         value = int(self.data.get(key, "0")) + 1
         self.data[key] = str(value)
         return value
+
+
+class FakeRateRedis:
+    def __init__(self) -> None:
+        self.data: dict[str, int] = {}
+
+    def incr(self, key: str) -> int:
+        value = self.data.get(key, 0) + 1
+        self.data[key] = value
+        return value
+
+    def expire(self, key: str, seconds: int) -> bool:
+        return True
 
 
 @pytest.fixture
@@ -105,18 +124,27 @@ def check_cache() -> CheckCache:
 
 @pytest.fixture
 def api_client(db_session: Session, check_cache: CheckCache) -> Iterator[TestClient]:
-    """HTTP client whose `get_db` dependency returns the test transaction's session."""
+    """HTTP client whose dependencies return test doubles and high rate limits."""
 
     def override_get_db() -> Iterator[Session]:
         yield db_session
 
+    limiter = RateLimiter(FakeRateRedis())
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_check_cache] = lambda: check_cache
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_rate_limits] = lambda: RateLimits(10_000, 10_000)
     try:
         with TestClient(app) as c:
             yield c
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def limited_client(api_client: TestClient) -> Iterator[TestClient]:
+    app.dependency_overrides[get_rate_limits] = lambda: RateLimits(1, 1)
+    yield api_client
 
 
 def utc(day: int, hour: int = 0) -> datetime:

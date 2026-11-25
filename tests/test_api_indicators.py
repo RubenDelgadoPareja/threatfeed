@@ -195,3 +195,19 @@ def test_check_ignores_an_incompatible_cached_payload(
 
     assert response.status_code == 200
     assert response.json()["value"] == "1.2.3.4"
+
+
+def test_rate_limit_returns_429_with_headers(
+    limited_client: TestClient, seeded_indicators: list[Indicator]
+) -> None:
+    first = limited_client.get("/check", params={"value": "1.2.3.4"})
+    assert first.status_code == 200
+    assert first.headers["X-RateLimit-Limit"] == "1"
+    assert first.headers["X-RateLimit-Remaining"] == "0"
+
+    second = limited_client.get("/check", params={"value": "1.2.3.4"})
+
+    assert second.status_code == 429
+    assert second.json() == {"detail": "rate limit exceeded"}
+    assert int(second.headers["Retry-After"]) > 0
+    assert second.headers["X-RateLimit-Remaining"] == "0"

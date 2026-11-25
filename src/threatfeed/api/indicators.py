@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from threatfeed.api.rate_limit import default_rate_limit
 from threatfeed.cache import CheckCache, get_check_cache
 from threatfeed.classification import MAX_VALUE_LENGTH, InvalidIndicator, classify_indicator
 from threatfeed.db.session import get_db
@@ -20,7 +21,7 @@ from threatfeed.schemas.indicator import IndicatorOut, IndicatorPage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(default_rate_limit)])
 
 
 @router.get(

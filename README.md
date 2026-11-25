@@ -10,9 +10,7 @@
 > normalizes and deduplicates them into PostgreSQL, and answers one question over a REST API:
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
-**Status:** phase 2 (applied security) complete; phase 3 (distributed) in progress
-(scheduling, workers, full compose and cache done; rate limiting pending). See the
-[roadmap](#roadmap).
+**Status:** phases 1–3 complete. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -123,6 +121,14 @@ key, so invalidation is O(1) and does not need a `SCAN`; old entries expire by T
 default). Hits and negative lookups are both cached. If Redis is unavailable, the endpoint falls
 back to PostgreSQL and only logs a warning.
 
+Rate limits are per client IP in fixed one-minute windows: `/check`, `/indicators` and `/stats`
+share **120 req/min**, while `/analyze/logs` gets **5 req/min**. Responses carry
+`X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; a 429 carries
+`Retry-After`. Both limits are configurable (`RATE_LIMIT_PER_MINUTE`,
+`RATE_LIMIT_LOGS_PER_MINUTE`). `/health`, `/docs` and `/openapi.json` are exempt. The client is
+`request.client.host`: behind a reverse proxy every client may share the proxy's address, and
+`X-Forwarded-For` is deliberately not trusted. If Redis is down, requests are allowed.
+
 ### Log analysis
 
 `POST /analyze/logs` takes a multipart file in nginx `combined` format and streams it line by
@@ -180,7 +186,8 @@ daily at 00:30 UTC (the export quota resets at 00:00). Both are configurable in 
 `URLHAUS_INTERVAL_MINUTES`, `THREATFOX_SCHEDULE_HOUR` and `THREATFOX_SCHEDULE_MINUTE`. The
 worker and Beat share `.cache/` through a bind mount, so the ThreatFox ZIP and GeoIP files are
 reused inside the containers. The `/check` cache TTL is `CHECK_CACHE_TTL_SECONDS` (300 by
-default). For local development you can run only the infrastructure and start the worker and
+default) and the API limits are `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_LOGS_PER_MINUTE`
+(120/5). For local development you can run only the infrastructure and start the worker and
 Beat yourself:
 
 ```bash
@@ -219,8 +226,8 @@ through the same reader and only changes the paths.
 
 Today both ingestors run end to end, the distributed stack schedules them through Celery, the
 API serves `/check`, `/indicators`, `/stats`, `/analyze/logs` and `/health`, IPs carry country
-and ASN, and `/check` is cached with versioned invalidation. Remaining in phase 3: rate
-limiting.
+and ASN, `/check` is cached with versioned invalidation, and the API is rate limited. Phase 3 is
+complete.
 
 Development:
 
@@ -269,13 +276,13 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] `POST /analyze/logs` to match an nginx access log against the indicators, parsed as a
     stream.
   - [x] GeoIP / ASN enrichment (MaxMind GeoLite2 or DB-IP Lite).
-- [ ] **Phase 3: distributed.**
+- [x] **Phase 3: distributed.**
   - [x] Celery + Redis scheduled ingestion with parallel workers.
   - [x] Retries with exponential backoff.
   - [x] Idempotent tasks: upsert plus a PostgreSQL advisory lock per feed.
   - [x] Full Docker Compose: database, Redis, API, worker and Beat.
   - [x] Redis cache for `/check` with invalidation after each ingestion.
-  - [ ] Rate limiting.
+  - [x] Rate limiting.
 
 ## Design decisions
 
@@ -308,6 +315,10 @@ Short version; detailed notes will grow with the project.
 - **The `/check` cache is versioned, not scanned.** Each ingestion increments a version key and
   entries are namespaced by it, so invalidation is O(1) and old keys expire by TTL. Negative
   lookups are cached too; a Redis outage falls back to PostgreSQL instead of failing the API.
+- **Rate limits are fixed-window and fail-open.** One-minute counters in Redis, keyed by client
+  IP and window. `X-Forwarded-For` is not trusted, so behind a reverse proxy the limit applies
+  to the proxy address until trusted proxies are configured. A Redis outage allows requests:
+  the limiter protects the service but must not become a new way to take it down.
 - **One `BaseIngestor`, two feeds.** Download and row mapping differ; batching, upsert,
   provenance, counters and the malformed-row guard are shared rather than copied.
 - **`/check` takes `?value=` and classifies it.** URLs contain `/` and `?`, so a path parameter

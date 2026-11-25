@@ -8,12 +8,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session, selectinload
 
+from threatfeed.api.rate_limit import logs_rate_limit
 from threatfeed.db.session import get_db
 from threatfeed.logs import Observable, parse_line
 from threatfeed.models import Indicator
 from threatfeed.schemas.logs import LogAnalysisOut, LogMatch
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(logs_rate_limit)])
 
 MAX_LOG_BYTES = 10 * 1024 * 1024
 MAX_MATCHES_DEFAULT = 100
