@@ -21,6 +21,39 @@ def test_iter_rows_skips_comments_and_blank_lines() -> None:
     assert len(_rows()) == 5
 
 
+def test_iter_rows_accepts_an_uncommented_header() -> None:
+    text = '"url","dateadded"\n"http://example.com","2026-01-01"\n'
+
+    assert list(iter_rows(StringIO(text))) == [
+        {"url": "http://example.com", "dateadded": "2026-01-01"}
+    ]
+
+
+def test_iter_rows_accepts_a_comment_prefixed_header() -> None:
+    text = (
+        "################################################################\n"
+        "# abuse.ch URLhaus Database Dump (CSV - recent URLs only)      #\n"
+        "# id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter\n"
+        '"1","2026-01-01 00:00:00","http://example.com","online","","malware_download","exe","","abuse_ch"\n'
+    )
+
+    rows = list(iter_rows(StringIO(text)))
+
+    assert rows == [
+        {
+            "id": "1",
+            "dateadded": "2026-01-01 00:00:00",
+            "url": "http://example.com",
+            "url_status": "online",
+            "last_online": "",
+            "threat": "malware_download",
+            "tags": "exe",
+            "urlhaus_link": "",
+            "reporter": "abuse_ch",
+        }
+    ]
+
+
 def test_iter_rows_accepts_a_bom() -> None:
     text = '\ufeff# comment\n"url","dateadded"\n"http://example.com","2026-01-01"\n'
 

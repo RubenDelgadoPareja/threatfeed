@@ -117,12 +117,29 @@ def iter_rows(stream: Iterable[str]) -> Iterator[dict[str, str | None]]:
 
 
 def _data_lines(stream: Iterable[str]) -> Iterator[str]:
+    header_found = False
     for line in stream:
         # A BOM would otherwise become part of the first header name.
         line = line.lstrip("\ufeff")
-        if line.lstrip().startswith("#") or not line.strip():
+        stripped = line.strip()
+        if not stripped:
             continue
+
+        if stripped.startswith("#"):
+            # URLhaus prefixes the real header with `#`: "# id,dateadded,url,...".
+            candidate = stripped.lstrip("#").strip()
+            if not header_found and _looks_like_header(candidate):
+                yield candidate
+                header_found = True
+            continue
+
         yield line
+        header_found = True
+
+
+def _looks_like_header(candidate: str) -> bool:
+    fields = next(csv.reader([candidate]), [])
+    return REQUIRED_COLUMNS.issubset({field.strip() for field in fields})
 
 
 class URLHausIngestor:
