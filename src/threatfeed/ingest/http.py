@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx2
 
-from threatfeed.ingest.errors import IngestError
+from threatfeed.ingest.errors import IngestError, RateLimitedError, RetryableIngestError
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,18 @@ def download_lines(url: str) -> Iterator[Iterable[str]]:
     """Stream a plain CSV export line by line, never buffering it in memory."""
     try:
         with _quiet_http_logs(), _client() as client, client.stream("GET", url) as response:
+            if response.status_code == 429:
+                raise RateLimitedError(
+                    "export download quota reached",
+                    retry_after=response.headers.get("retry-after"),
+                )
             if response.status_code != 200:
                 raise IngestError(f"export returned HTTP {response.status_code}")
             _reject_markup(response)
             yield response.iter_lines()
     except httpx2.HTTPError as exc:
         # Network errors embed the request URL, key included; never chain the original.
-        raise IngestError(f"request failed: {redact_url(str(exc))}") from None
+        raise RetryableIngestError(f"request failed: {redact_url(str(exc))}") from None
 
 
 @contextmanager
@@ -120,7 +125,7 @@ def _fetch_zip(url: str, path: Path) -> None:
             error = f"invalid ZIP: {exc}"
 
         if attempt == DOWNLOAD_ATTEMPTS:
-            raise IngestError(
+            raise RetryableIngestError(
                 f"could not download export after {DOWNLOAD_ATTEMPTS} attempts ({error})"
             )
         time.sleep(2 ** (attempt - 1))
@@ -139,9 +144,10 @@ def _append_zip(url: str, path: Path) -> None:
             return
         if response.status_code == 429:
             retry_after = response.headers.get("retry-after", "unknown")
-            raise IngestError(
+            raise RateLimitedError(
                 "export download quota reached "
-                f"(retry after {retry_after}s; the full export is cached for the UTC day)"
+                f"(retry after {retry_after}s; the full export is cached for the UTC day)",
+                retry_after=response.headers.get("retry-after"),
             )
         if response.status_code not in (200, 206):
             raise IngestError(f"export returned HTTP {response.status_code}")

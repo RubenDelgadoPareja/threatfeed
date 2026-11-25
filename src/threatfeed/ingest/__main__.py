@@ -8,10 +8,7 @@ from threatfeed.config import get_settings
 from threatfeed.db.session import get_session_factory
 from threatfeed.geoip import GeoIP
 from threatfeed.ingest.errors import IngestError
-from threatfeed.ingest.threatfox import ThreatFoxIngestor
-from threatfeed.ingest.urlhaus import URLHausIngestor
-
-FEEDS = {"threatfox": ThreatFoxIngestor, "urlhaus": URLHausIngestor}
+from threatfeed.ingest.runner import FEEDS, run_feed
 
 
 def _positive_int(value: str) -> int:
@@ -47,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
         settings = get_settings()
         geoip = GeoIP.from_settings(settings)
         with get_session_factory()() as session:
-            FEEDS[args.feed](session, settings, geoip).run(limit=args.limit)
+            started = run_feed(session, args.feed, settings, geoip, limit=args.limit)
+        if not started:
+            logger.warning("%s is already running; skipping this invocation", args.feed)
     except IngestError as exc:
         logger.error("%s", exc)
         return 1

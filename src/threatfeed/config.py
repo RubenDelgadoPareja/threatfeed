@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     geoip_country_db: Path | None = None
     geoip_asn_db: Path | None = None
 
+    # Celery broker and scheduling defaults (UTC).
+    redis_url: str = "redis://localhost:6379/0"
+    urlhaus_interval_minutes: int = Field(default=60, ge=1)
+    threatfox_schedule_hour: int = Field(default=0, ge=0, le=23)
+    threatfox_schedule_minute: int = Field(default=30, ge=0, le=59)
+
     @property
     def database_url(self) -> str:
         """SQLAlchemy DSN: postgresql+psycopg://user:password@host:port/db"""

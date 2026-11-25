@@ -1,5 +1,4 @@
-# Local development environment. Phase 1: PostgreSQL only.
-# Phase 3 adds api, worker, beat and redis to this same file.
+# Local development environment: database, broker, API, worker and scheduler.
 services:
   db:
     image: postgres:18-alpine
@@ -20,6 +19,65 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    image: threatfeed:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    image: threatfeed:local
+    restart: unless-stopped
+    command: celery -A threatfeed.celery_app worker --loglevel=INFO --concurrency=2
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./.cache:/app/.cache
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: .
+    image: threatfeed:local
+    restart: unless-stopped
+    command: celery -A threatfeed.celery_app beat --loglevel=INFO
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./.cache:/app/.cache
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:

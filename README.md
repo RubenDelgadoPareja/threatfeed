@@ -10,7 +10,8 @@
 > normalizes and deduplicates them into PostgreSQL, and answers one question over a REST API:
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
-**Status:** phase 2 (applied security) complete; phase 3 (distributed) next. See the
+**Status:** phase 2 (applied security) complete; phase 3 (distributed) in progress
+(scheduling, workers and full compose done; cache and rate limiting pending). See the
 [roadmap](#roadmap).
 
 ## Why
@@ -141,10 +142,11 @@ capped at 10 MB (413 above that) and at 100 matches by default (max 1000).
 | ORM / migrations | SQLAlchemy 2 (sync) + Alembic | Explicit SQL model, versioned schema changes |
 | Database | PostgreSQL 18 | `jsonb`, `timestamptz`, native upsert |
 | GeoIP / ASN | `geoip2` + MMDB | Local lookups, no per-request network call; GeoLite2 or DB-IP Lite |
+| Queue / scheduling | Celery + Redis | Scheduled ingestion, retries, one run per feed; Redis will also back the `/check` cache |
 | Driver | psycopg 3 | Modern, actively maintained Postgres driver |
 | Config | pydantic-settings | Typed settings from environment / `.env`, 12-factor style |
 | Tooling | uv · pytest · ruff | Fast, reproducible installs; tests; lint + format in one tool |
-| Local env | Docker Compose | One command to bring up the database (and, later, workers) |
+| Local env | Docker Compose | One command to bring up the database, broker, API, worker and scheduler |
 
 ## Getting started
 
@@ -154,12 +156,36 @@ Requirements: [uv](https://docs.astral.sh/uv/) and Docker with Compose v2.
 git clone https://github.com/RubenDelgadoPareja/threatfeed.git
 cd threatfeed
 cp .env.example .env                          # dev credentials + ABUSECH_AUTH_KEY (free)
-docker compose up -d db                       # PostgreSQL with a readiness healthcheck
+docker compose up -d db redis                 # PostgreSQL + Redis
 uv sync                                       # creates .venv and installs everything
 uv run alembic upgrade head                   # apply migrations
 uv run python -m threatfeed.ingest urlhaus    # URLhaus: ~60k URLs
 uv run python -m threatfeed.ingest threatfox  # ThreatFox: ~150k IOCs of every type
 uv run uvicorn threatfeed.main:app --reload   # API on http://localhost:8000 (docs at /docs)
+```
+
+To run the whole stack in containers instead:
+
+```bash
+docker compose up -d --build                  # db, redis, api, worker and beat
+```
+
+The API is on `http://localhost:8000`. Beat schedules URLhaus every 60 minutes and ThreatFox
+daily at 00:30 UTC (the export quota resets at 00:00). Both are configurable in `.env` through
+`URLHAUS_INTERVAL_MINUTES`, `THREATFOX_SCHEDULE_HOUR` and `THREATFOX_SCHEDULE_MINUTE`. The
+worker and Beat share `.cache/` through a bind mount, so the ThreatFox ZIP and GeoIP files are
+reused inside the containers. For local development you can run only the infrastructure and
+start the worker and Beat yourself:
+
+```bash
+uv run celery -A threatfeed.celery_app worker --loglevel=INFO
+uv run celery -A threatfeed.celery_app beat --loglevel=INFO
+```
+
+Manual task dispatch is useful for smoke tests:
+
+```bash
+uv run python -c "from threatfeed.tasks import ingest_feed; ingest_feed.delay('urlhaus', limit=10)"
 ```
 
 Both abuse.ch feeds need a free key from [auth.abuse.ch](https://auth.abuse.ch/), set as
@@ -174,8 +200,9 @@ ingest only the first N rows, and rely on the exit code: 0 if the run ended `suc
 ended `failed`.
 
 GeoIP enrichment is optional. Download the MMDB files — [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
-or [DB-IP Lite](https://db-ip.com/) — set `GEOIP_COUNTRY_DB` and `GEOIP_ASN_DB` in `.env`, and
-backfill the IPs already stored:
+or [DB-IP Lite](https://db-ip.com/) — set `GEOIP_COUNTRY_DB` and `GEOIP_ASN_DB` in `.env`
+(relative paths such as `.cache/geoip/country.mmdb` work both locally and in the containers),
+and backfill the IPs already stored:
 
 ```bash
 uv run python -m threatfeed.enrich
@@ -184,8 +211,9 @@ uv run python -m threatfeed.enrich
 New IPs are enriched during ingestion. The examples use DB-IP Lite (CC BY 4.0); GeoLite2 works
 through the same reader and only changes the paths.
 
-Today both ingestors run end to end, the API serves `/check`, `/indicators`, `/stats`,
-`/analyze/logs` and `/health`, and IPs carry country and ASN.
+Today both ingestors run end to end, the distributed stack schedules them through Celery, the
+API serves `/check`, `/indicators`, `/stats`, `/analyze/logs` and `/health`, and IPs carry
+country and ASN. Remaining in phase 3: the Redis cache for `/check` and rate limiting.
 
 Development:
 
@@ -200,6 +228,8 @@ uv run ruff check . && uv run ruff format --check .
 src/threatfeed/
 ├── main.py             # FastAPI app and router wiring
 ├── config.py           # settings (pydantic-settings, .env)
+├── celery_app.py       # Celery app and Beat schedule
+├── tasks.py            # ingest_feed task
 ├── classification.py   # infer the type of an incoming value and normalize it
 ├── normalize.py        # URL canonicalization shared by ingestion and lookups
 ├── logs.py             # nginx combined log parser
@@ -208,7 +238,7 @@ src/threatfeed/
 ├── db/                 # declarative base, engine/session, Alembic migrations
 ├── models/             # SQLAlchemy models
 ├── schemas/            # Pydantic response schemas
-├── ingest/             # BaseIngestor, CSV/HTTP helpers, one module per feed
+├── ingest/             # BaseIngestor, runner, lock, CSV/HTTP helpers, feeds
 ├── enrich/             # GeoIP backfill CLI
 └── api/                # routers
 tests/
@@ -232,9 +262,13 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] `POST /analyze/logs` to match an nginx access log against the indicators, parsed as a
     stream.
   - [x] GeoIP / ASN enrichment (MaxMind GeoLite2 or DB-IP Lite).
-- [ ] **Phase 3: distributed.** Celery + Redis scheduled ingestion with parallel workers ·
-  retries with exponential backoff · rate limiting · idempotent tasks · Redis cache for `/check`
-  with invalidation after each ingestion · full Docker Compose.
+- [ ] **Phase 3: distributed.**
+  - [x] Celery + Redis scheduled ingestion with parallel workers.
+  - [x] Retries with exponential backoff.
+  - [x] Idempotent tasks: upsert plus a PostgreSQL advisory lock per feed.
+  - [x] Full Docker Compose: database, Redis, API, worker and Beat.
+  - [ ] Rate limiting.
+  - [ ] Redis cache for `/check` with invalidation after each ingestion.
 
 ## Design decisions
 
@@ -255,6 +289,15 @@ Short version; detailed notes will grow with the project.
   the guard. More than 10% malformed rows still fail the run: that is a format change.
 - **The ThreatFox ZIP is cached for the UTC day.** The provider allows four times the file size
   per day, counting partial transfers, so a fresh cache avoids burning quota on repeated runs.
+- **Redis is the broker, not the source of truth.** No result backend: run state lives in
+  `ingest_runs`. `acks_late`, one prefetch and a two-hour visibility timeout keep a slow
+  ThreatFox run from being delivered twice.
+- **One advisory lock per feed.** The CLI and the Celery task share it; PostgreSQL releases it
+  when the connection closes, so a dead worker cannot leave a feed locked. The upsert is still
+  the final guarantee of idempotency.
+- **Retries are classified.** Transient network and database errors retry with exponential
+  backoff; 429s, auth failures and malformed feeds do not, because retrying them only burns the
+  provider's quota or repeats the same mistake.
 - **One `BaseIngestor`, two feeds.** Download and row mapping differ; batching, upsert,
   provenance, counters and the malformed-row guard are shared rather than copied.
 - **`/check` takes `?value=` and classifies it.** URLs contain `/` and `?`, so a path parameter
