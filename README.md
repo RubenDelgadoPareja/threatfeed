@@ -10,8 +10,8 @@
 > normalizes and deduplicates them into PostgreSQL, and answers one question over a REST API:
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
-**Status:** phase 1 (backend) complete; phase 2 in progress (confidence score done). See the
-[roadmap](#roadmap).
+**Status:** phase 1 (backend) complete; phase 2 in progress (confidence score and log analysis
+done; GeoIP next). See the [roadmap](#roadmap).
 
 ## Why
 
@@ -60,7 +60,8 @@ flowchart LR
    constraint. Re-ingesting never creates duplicates: it updates `last_seen` and appends the new
    source. Ingestion is idempotent, so a crashed or repeated run is always safe to re-run.
 3. **Serve.** A FastAPI service answers lookups, lists indicators with pagination, reports
-   totals per type and source, and scores confidence from source agreement and freshness.
+   totals per type and source, scores confidence from source agreement and freshness, and
+   matches nginx access logs against the store.
 
 ## Data model
 
@@ -97,6 +98,7 @@ a crash leaves evidence.
 | `GET /check?value=...` | Is this indicator known? Returns type, sources, dates and confidence |
 | `GET /indicators?type=&limit=&offset=` | Paginated listing, optionally filtered by type |
 | `GET /stats` | Totals per type and per source |
+| `POST /analyze/logs` | Match an nginx `combined` access log against the store |
 | `GET /health` | Liveness check |
 
 `/check` infers the type (IP, domain, URL, MD5 or SHA256) and normalizes the value with the same
@@ -106,6 +108,22 @@ newest first), and `/stats` returns `{total, by_type, by_source}` with every typ
 
 Both indicator endpoints include `confidence: {score, level, reasons}`: how many distinct feeds
 report the indicator plus how fresh the latest report is. It is computed on read, never stored.
+
+### Log analysis
+
+`POST /analyze/logs` takes a multipart file in nginx `combined` format and streams it line by
+line, looking up observables in batches of 500 lines:
+
+```bash
+curl -F "file=@access.log" "http://localhost:8000/analyze/logs?max_matches=10"
+```
+
+It extracts the **client IP** and **absolute URLs** found in the request and the referer. An
+origin-form path (`GET /x HTTP/1.1`) has no host, so it is ignored rather than guessed; use a log
+format with `$host` if you need path matching. The response summarizes `lines_read`,
+`lines_skipped`, `unique_indicators` and `truncated`, with one entry per indicator: `hits`,
+`first_line`, `last_line`, `matched_on` and the full indicator including confidence. Uploads are
+capped at 10 MB (413 above that) and at 100 matches by default (max 1000).
 
 ## Stack
 
@@ -164,6 +182,7 @@ src/threatfeed/
 ├── config.py           # settings (pydantic-settings, .env)
 ├── classification.py   # infer the type of an incoming value and normalize it
 ├── normalize.py        # URL canonicalization shared by ingestion and lookups
+├── logs.py             # nginx combined log parser
 ├── db/                 # declarative base, engine/session, Alembic migrations
 ├── models/             # SQLAlchemy models
 ├── schemas/            # Pydantic response schemas
@@ -187,9 +206,9 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] Tests: parser fixtures from real CSV excerpts, API against a test database.
 - [ ] **Phase 2: applied security.**
   - [x] Multi-source confidence score on `/check` and `/indicators`.
-  - [ ] GeoIP / ASN enrichment (MaxMind GeoLite2).
-  - [ ] `POST /analyze/logs` to match an nginx access log against the indicators, parsed as a
+  - [x] `POST /analyze/logs` to match an nginx access log against the indicators, parsed as a
     stream.
+  - [ ] GeoIP / ASN enrichment (MaxMind GeoLite2).
 - [ ] **Phase 3: distributed.** Celery + Redis scheduled ingestion with parallel workers ·
   retries with exponential backoff · rate limiting · idempotent tasks · Redis cache for `/check`
   with invalidation after each ingestion · full Docker Compose.
@@ -224,6 +243,9 @@ Short version; detailed notes will grow with the project.
   from the last 7 days adds 10, from the last 30 adds 5, capped at 100. It counts *feeds*, not
   providers, because both current feeds are abuse.ch; cross-provider weighting waits for a third,
   genuinely independent source.
+- **Log matching is conservative.** Only the client IP and absolute URLs in the request/referer
+  are looked up; an origin-form path has no host, and inventing one would create false positives.
+  Observables are queried in batches of 500 lines, and uploads are capped at 10 MB.
 - **Synchronous SQLAlchemy.** FastAPI runs plain `def` endpoints in a threadpool, so sync database
   calls do not block the event loop, and the phase 3 Celery workers are synchronous anyway.
   Async would add complexity without a measurable gain at this scale.

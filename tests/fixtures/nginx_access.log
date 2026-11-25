@@ -1,0 +1,5 @@
+1.2.3.4 - - [25/Nov/2026:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 512 "-" "Mozilla/5.0"
+5.6.7.8 - - [25/Nov/2026:10:01:00 +0000] "GET http://bad.example/payload HTTP/1.1" 200 123 "http://evil.example/ref" "curl/8"
+not a combined log line
+1.2.3.4 - - [25/Nov/2026:10:02:00 +0000] "POST /api HTTP/1.1" 403 0 "http://evil.example/ref" "Mozilla/5.0"
+9.9.9.9 - - [25/Nov/2026:10:03:00 +0000] "GET /nothing HTTP/1.1" 200 1 "-" "Mozilla/5.0"
