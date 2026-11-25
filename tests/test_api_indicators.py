@@ -17,6 +17,9 @@ def test_check_normalizes_urls_and_returns_provenance(
     sources = {source["feed"]: source for source in body["sources"]}
     assert set(sources) == {"feodotracker", "urlhaus"}
     assert sources["feodotracker"]["last_seen"].startswith("2026-03-05")
+    assert body["confidence"]["score"] == 70
+    assert body["confidence"]["level"] == "medium"
+    assert "2 sources agree" in body["confidence"]["reasons"]
     assert "raw" not in body
 
 
@@ -59,6 +62,8 @@ def test_indicators_are_paginated_newest_first(
     assert body["limit"] == 2
     assert body["offset"] == 0
     assert [item["value"] for item in body["items"]] == ["1.2.3.4", "http://example.com/a"]
+    assert body["items"][0]["confidence"]["score"] == 40
+    assert body["items"][0]["confidence"]["level"] == "low"
 
     second_page = api_client.get("/indicators", params={"limit": 2, "offset": 2}).json()
     assert [item["value"] for item in second_page["items"]] == ["evil.example"]

@@ -7,9 +7,10 @@ import sys
 from threatfeed.config import get_settings
 from threatfeed.db.session import get_session_factory
 from threatfeed.ingest.errors import IngestError
+from threatfeed.ingest.threatfox import ThreatFoxIngestor
 from threatfeed.ingest.urlhaus import URLHausIngestor
 
-FEEDS = {"urlhaus": URLHausIngestor}
+FEEDS = {"threatfox": ThreatFoxIngestor, "urlhaus": URLHausIngestor}
 
 
 def _positive_int(value: str) -> int:

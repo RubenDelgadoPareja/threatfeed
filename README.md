@@ -10,7 +10,8 @@
 > normalizes and deduplicates them into PostgreSQL, and answers one question over a REST API:
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
-**Status:** phase 1 (backend) in progress. See the [roadmap](#roadmap).
+**Status:** phase 1 (backend) complete; phase 2 in progress (confidence score done). See the
+[roadmap](#roadmap).
 
 ## Why
 
@@ -37,7 +38,7 @@ and organizes it. It does not scan, attack, or analyze malware.
 flowchart LR
     subgraph feeds["Public feeds (abuse.ch)"]
         U[URLhaus CSV]
-        F[Feodo Tracker CSV]
+        T[ThreatFox CSV]
     end
 
     subgraph ingest["Ingest · python -m threatfeed.ingest &lt;feed&gt;"]
@@ -45,20 +46,21 @@ flowchart LR
     end
 
     U --> D
-    F --> D
+    T --> D
     UP --> DB[("PostgreSQL<br/>indicators · ingest_runs")]
     DB --> API["FastAPI<br/>/check · /indicators · /stats · /health"]
     API --> SOC[Analyst / SOC tooling]
 ```
 
-1. **Ingest.** One ingestor per feed downloads the CSV, parses it (skipping comment lines),
-   normalizes each indicator (lowercase scheme and host, no trailing dot, no default port or
-   fragment) and upserts it. Every run is recorded in `ingest_runs` with counters and status.
+1. **Ingest.** One ingestor per feed downloads and parses it (CSV, or a ZIP containing one),
+   skipping comment lines, normalizes each indicator (lowercase scheme and host, no trailing dot,
+   no default port or fragment) and upserts it. Every run is recorded in `ingest_runs` with
+   counters and status.
 2. **Deduplicate.** An indicator's identity is the pair `(type, value)`, enforced by a unique
    constraint. Re-ingesting never creates duplicates: it updates `last_seen` and appends the new
    source. Ingestion is idempotent, so a crashed or repeated run is always safe to re-run.
-3. **Serve.** A FastAPI service answers lookups, lists indicators with pagination and reports
-   totals per type and source.
+3. **Serve.** A FastAPI service answers lookups, lists indicators with pagination, reports
+   totals per type and source, and scores confidence from source agreement and freshness.
 
 ## Data model
 
@@ -74,13 +76,14 @@ flowchart LR
 | `raw` | jsonb | Latest original payload, kept for reprocessing |
 
 Unique constraint on `(type, value)`. Deduplication happens in the database with an upsert
-(`INSERT ... ON CONFLICT DO UPDATE`), not in application code.
+(`INSERT ... ON CONFLICT DO UPDATE`), not in application code. ThreatFox's `sha1_hash` IOCs are
+skipped because the vocabulary is closed; they are counted in `rows_skipped`.
 
 **`indicator_sources`**: provenance per feed, so "who says so" survives a feed that stops
 reporting an indicator. Columns: `indicator_id` (FK, `ON DELETE CASCADE`), `feed`,
 `first_seen`, `last_seen`; primary key `(indicator_id, feed)`. Rows are upserted, never deleted
-implicitly: a truncated download must not wipe provenance, and URLhaus' dump is a rolling
-90-day window, so absence does not mean the indicator is clean.
+implicitly: a truncated download must not wipe provenance, and the dumps are rolling windows
+(90 days for URLhaus, 6 months for ThreatFox), so absence does not mean the indicator is clean.
 
 **`ingest_runs`**: `feed`, `started_at`, `finished_at`, `status` (`running`, `succeeded`,
 `failed`), `rows_read`, `rows_skipped`, `indicators_new`, `indicators_updated`, `error`. The
@@ -91,7 +94,7 @@ a crash leaves evidence.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /check?value=...` | Is this indicator known? Returns type, sources, first and last seen |
+| `GET /check?value=...` | Is this indicator known? Returns type, sources, dates and confidence |
 | `GET /indicators?type=&limit=&offset=` | Paginated listing, optionally filtered by type |
 | `GET /stats` | Totals per type and per source |
 | `GET /health` | Liveness check |
@@ -100,6 +103,9 @@ a crash leaves evidence.
 rules used at ingestion; it returns **404** when the value is valid but unknown and **422** when it
 cannot be classified. `/indicators` returns `{items, total, limit, offset}` (default 50, max 200,
 newest first), and `/stats` returns `{total, by_type, by_source}` with every type present.
+
+Both indicator endpoints include `confidence: {score, level, reasons}`: how many distinct feeds
+report the indicator plus how fresh the latest report is. It is computed on read, never stored.
 
 ## Stack
 
@@ -120,22 +126,28 @@ Requirements: [uv](https://docs.astral.sh/uv/) and Docker with Compose v2.
 ```bash
 git clone https://github.com/RubenDelgadoPareja/threatfeed.git
 cd threatfeed
-cp .env.example .env                         # dev credentials + URLHAUS_AUTH_KEY (free)
-docker compose up -d db                      # PostgreSQL with a readiness healthcheck
-uv sync                                      # creates .venv and installs everything
-uv run alembic upgrade head                  # apply migrations
-uv run python -m threatfeed.ingest urlhaus   # first ingestion
-uv run uvicorn threatfeed.main:app --reload  # API on http://localhost:8000 (docs at /docs)
+cp .env.example .env                          # dev credentials + ABUSECH_AUTH_KEY (free)
+docker compose up -d db                       # PostgreSQL with a readiness healthcheck
+uv sync                                       # creates .venv and installs everything
+uv run alembic upgrade head                   # apply migrations
+uv run python -m threatfeed.ingest urlhaus    # URLhaus: ~60k URLs
+uv run python -m threatfeed.ingest threatfox  # ThreatFox: ~150k IOCs of every type
+uv run uvicorn threatfeed.main:app --reload   # API on http://localhost:8000 (docs at /docs)
 ```
 
-The URLhaus export requires a free key from [auth.abuse.ch](https://auth.abuse.ch/), set as
-`URLHAUS_AUTH_KEY` in `.env`; it travels in the URL path and is redacted from logs. `URLHAUS_EXPORT`
-selects the export file (`recent.csv` by default); other exports, such as the full dump, are named
-in your abuse.ch account. Add `--limit N` to ingest only the first N rows, and rely on the exit
-code: 0 if the run ended `succeeded`, 1 if it ended `failed`.
+Both abuse.ch feeds need a free key from [auth.abuse.ch](https://auth.abuse.ch/), set as
+`ABUSECH_AUTH_KEY` in `.env` (`URLHAUS_AUTH_KEY` is still accepted as the old name). The key
+travels in the URL path and is redacted from logs. `URLHAUS_EXPORT` selects the URLhaus file
+(`recent.csv` by default); other exports are named in your abuse.ch account.
 
-Today the schema is migrated, the URLhaus ingestor runs end to end and the API serves `/check`,
-`/indicators`, `/stats` and `/health`; the Feodo Tracker ingestor is next.
+ThreatFox limits downloads to four times the export size per UTC day, counting partial
+transfers. The full ZIP is cached in `.cache/threatfeed/` for the current UTC day, so repeated
+runs reuse it; on a cache miss and a 429 the run fails with the reset time. Add `--limit N` to
+ingest only the first N rows, and rely on the exit code: 0 if the run ended `succeeded`, 1 if it
+ended `failed`.
+
+Today both ingestors run end to end and the API serves `/check`, `/indicators`, `/stats` and
+`/health`; phase 1 is complete.
 
 Development:
 
@@ -155,7 +167,7 @@ src/threatfeed/
 ├── db/                 # declarative base, engine/session, Alembic migrations
 ├── models/             # SQLAlchemy models
 ├── schemas/            # Pydantic response schemas
-├── ingest/             # one ingestor per feed
+├── ingest/             # BaseIngestor, CSV/HTTP helpers, one module per feed
 └── api/                # routers
 tests/
 ├── fixtures/           # real CSV excerpts
@@ -165,17 +177,19 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
 
 ## Roadmap
 
-- [ ] **Phase 1: backend.**
+- [x] **Phase 1: backend.**
   - [x] Scaffold: `src/` layout, Docker Compose with PostgreSQL 18, typed settings, Alembic wired
     to the app settings, FastAPI app with lifespan and `GET /health`, pytest + ruff.
   - [x] Models and first migration (`indicators`, `indicator_sources`, `ingest_runs`).
   - [x] URLhaus ingestor (`python -m threatfeed.ingest urlhaus`).
   - [x] REST API: `/check`, `/indicators`, `/stats`.
-  - [ ] Feodo Tracker ingestor on a shared `BaseIngestor`.
+  - [x] ThreatFox ingestor on a shared `BaseIngestor`.
   - [x] Tests: parser fixtures from real CSV excerpts, API against a test database.
-- [ ] **Phase 2: applied security.** GeoIP / ASN enrichment (MaxMind GeoLite2) · multi-source
-  confidence score · `POST /analyze/logs` to match an nginx access log against the indicators,
-  parsed as a stream.
+- [ ] **Phase 2: applied security.**
+  - [x] Multi-source confidence score on `/check` and `/indicators`.
+  - [ ] GeoIP / ASN enrichment (MaxMind GeoLite2).
+  - [ ] `POST /analyze/logs` to match an nginx access log against the indicators, parsed as a
+    stream.
 - [ ] **Phase 3: distributed.** Celery + Redis scheduled ingestion with parallel workers ·
   retries with exponential backoff · rate limiting · idempotent tasks · Redis cache for `/check`
   with invalidation after each ingestion · full Docker Compose.
@@ -194,13 +208,22 @@ Short version; detailed notes will grow with the project.
 - **Commit per batch, not per file.** 500 rows per transaction keeps locks and WAL bounded; a
   crash leaves committed batches plus a `failed` run, and the idempotent upsert makes re-running
   converge. All-or-nothing would mean one bad row discards an entire download.
-- **A run that discards more than 10% of its rows fails.** Otherwise a feed format change looks
-  like a healthy ingestion that silently imported a fraction of the data.
+- **Known unsupported types are skipped; malformed rows fail the run.** ThreatFox's `sha1_hash`
+  IOCs do not fit the closed vocabulary, so they are counted in `rows_skipped` without tripping
+  the guard. More than 10% malformed rows still fail the run: that is a format change.
+- **The ThreatFox ZIP is cached for the UTC day.** The provider allows four times the file size
+  per day, counting partial transfers, so a fresh cache avoids burning quota on repeated runs.
+- **One `BaseIngestor`, two feeds.** Download and row mapping differ; batching, upsert,
+  provenance, counters and the malformed-row guard are shared rather than copied.
 - **`/check` takes `?value=` and classifies it.** URLs contain `/` and `?`, so a path parameter
   would force double encoding; and the caller should not have to declare the type. The value is
   normalized with the same code as ingestion, or lookups miss on a trailing dot or default port.
 - **Malformed input is 422; a valid but unknown indicator is 404.** Keeping the two cases
   distinguishable matters when debugging why a lookup "did not find anything".
+- **Confidence is computed, not stored.** One feed scores 40, two 70, three or more 90; a report
+  from the last 7 days adds 10, from the last 30 adds 5, capped at 100. It counts *feeds*, not
+  providers, because both current feeds are abuse.ch; cross-provider weighting waits for a third,
+  genuinely independent source.
 - **Synchronous SQLAlchemy.** FastAPI runs plain `def` endpoints in a threadpool, so sync database
   calls do not block the event loop, and the phase 3 Celery workers are synchronous anyway.
   Async would add complexity without a measurable gain at this scale.
@@ -219,6 +242,7 @@ Short version; detailed notes will grow with the project.
 | Botnet | A set of infected machines controlled by the same C2 |
 | False positive | Flagging something legitimate as malicious |
 | Normalization | Reducing each indicator to a canonical form so that equal indicators compare equal |
+| Confidence | How strongly the stored sources agree that an indicator is malicious, weighted by freshness |
 
 ---
 

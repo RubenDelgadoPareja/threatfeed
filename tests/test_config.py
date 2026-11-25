@@ -32,3 +32,14 @@ def test_database_url_escapes_password() -> None:
 def test_urlhaus_export_cannot_escape_the_export_path() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, urlhaus_export="../../etc/passwd")
+
+
+def test_abusech_key_accepts_the_old_and_new_env_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ABUSECH_AUTH_KEY", raising=False)
+    monkeypatch.delenv("URLHAUS_AUTH_KEY", raising=False)
+
+    monkeypatch.setenv("URLHAUS_AUTH_KEY", "old")
+    assert Settings(_env_file=None).abusech_auth_key == "old"
+
+    monkeypatch.setenv("ABUSECH_AUTH_KEY", "new")
+    assert Settings(_env_file=None).abusech_auth_key == "new"

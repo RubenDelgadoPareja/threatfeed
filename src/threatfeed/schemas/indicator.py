@@ -3,8 +3,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
+from threatfeed.confidence import SourceEvidence, score_confidence
 from threatfeed.models import IndicatorType
 
 
@@ -18,6 +19,12 @@ class IndicatorSourceOut(BaseModel):
     last_seen: datetime
 
 
+class ConfidenceOut(BaseModel):
+    score: int
+    level: str
+    reasons: list[str]
+
+
 class IndicatorOut(BaseModel):
     """An indicator without `raw`: the feed payload stays internal."""
 
@@ -29,6 +36,15 @@ class IndicatorOut(BaseModel):
     first_seen: datetime
     last_seen: datetime
     sources: list[IndicatorSourceOut]
+
+    @computed_field
+    @property
+    def confidence(self) -> ConfidenceOut:
+        evidence = [
+            SourceEvidence(feed=source.feed, last_seen=source.last_seen) for source in self.sources
+        ]
+        result = score_confidence(evidence)
+        return ConfidenceOut(score=result.score, level=result.level, reasons=list(result.reasons))
 
 
 class IndicatorPage(BaseModel):
