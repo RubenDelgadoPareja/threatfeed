@@ -12,6 +12,7 @@ from sqlalchemy import func, literal_column
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from threatfeed.classification import MAX_VALUE_LENGTH
 from threatfeed.config import Settings
 from threatfeed.enrichment import upsert_ip_enrichment
 from threatfeed.geoip import GeoLookup
@@ -98,20 +99,24 @@ class BaseIngestor:
             reason = "unsupported row"
             try:
                 item = self.parse_row(row, now)
-                if item is not None:
-                    batch.append(item)
-                else:
-                    reason = "unsupported indicator type"
             except ValueError as exc:
                 item = None
                 unexpected_skips += 1
                 reason = str(exc)
+            else:
+                reason = "unsupported indicator type"
+                if item is not None and len(item.value) > MAX_VALUE_LENGTH:
+                    item = None
+                    unexpected_skips += 1
+                    reason = f"value exceeds {MAX_VALUE_LENGTH} characters"
 
             if item is None:
                 run.rows_skipped += 1
                 if skipped_samples < self.skip_sample_size:
                     skipped_samples += 1
                     logger.warning("skipping row %d: %s", row_number, reason)
+            else:
+                batch.append(item)
 
             if len(batch) >= self.batch_size:
                 self._store(run, batch)

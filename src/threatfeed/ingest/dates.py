@@ -17,3 +17,17 @@ def parse_utc(value: str) -> datetime:
         except ValueError:
             continue
     raise InvalidRow(f"unparseable timestamp: {value!r}")
+
+
+def parse_iso8601(value: str) -> datetime:
+    """Parse an ISO 8601 timestamp with an offset, normalizing it to UTC."""
+    cleaned = value.strip()
+    if not cleaned:
+        raise InvalidRow("empty timestamp")
+    try:
+        parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InvalidRow(f"unparseable timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

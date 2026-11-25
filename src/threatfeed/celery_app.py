@@ -34,5 +34,10 @@ app.conf.update(
             ),
             "args": ("threatfox",),
         },
+        "phishtank": {
+            "task": "threatfeed.ingest_feed",
+            "schedule": timedelta(hours=settings.phishtank_interval_hours),
+            "args": ("phishtank",),
+        },
     },
 )

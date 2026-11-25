@@ -10,7 +10,8 @@
 > normalizes and deduplicates them into PostgreSQL, and answers one question over a REST API:
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
-**Status:** phases 1–3 complete. See the [roadmap](#roadmap).
+**Status:** phases 1–3 complete, plus a third independent feed (PhishTank). See the
+[roadmap](#roadmap).
 
 ## Why
 
@@ -35,9 +36,10 @@ and organizes it. It does not scan, attack, or analyze malware.
 
 ```mermaid
 flowchart LR
-    subgraph feeds["Public feeds (abuse.ch)"]
+    subgraph feeds["Public feeds (abuse.ch + PhishTank)"]
         U[URLhaus CSV]
         T[ThreatFox CSV]
+        P[PhishTank CSV]
     end
 
     subgraph ingest["Ingest · python -m threatfeed.ingest &lt;feed&gt;"]
@@ -46,6 +48,7 @@ flowchart LR
 
     U --> D
     T --> D
+    P --> D
     UP --> DB[("PostgreSQL<br/>indicators · ingest_runs")]
     DB --> API["FastAPI<br/>/check · /indicators · /stats · /health"]
     API --> SOC[Analyst / SOC tooling]
@@ -172,6 +175,7 @@ uv sync                                       # creates .venv and installs every
 uv run alembic upgrade head                   # apply migrations
 uv run python -m threatfeed.ingest urlhaus    # URLhaus: ~60k URLs
 uv run python -m threatfeed.ingest threatfox  # ThreatFox: ~150k IOCs of every type
+uv run python -m threatfeed.ingest phishtank  # PhishTank: ~40k verified phishing URLs
 uv run uvicorn threatfeed.main:app --reload   # API on http://localhost:8000 (docs at /docs)
 ```
 
@@ -181,14 +185,14 @@ To run the whole stack in containers instead:
 docker compose up -d --build                  # db, redis, api, worker and beat
 ```
 
-The API is on `http://localhost:8000`. Beat schedules URLhaus every 60 minutes and ThreatFox
-daily at 00:30 UTC (the export quota resets at 00:00). Both are configurable in `.env` through
-`URLHAUS_INTERVAL_MINUTES`, `THREATFOX_SCHEDULE_HOUR` and `THREATFOX_SCHEDULE_MINUTE`. The
-worker and Beat share `.cache/` through a bind mount, so the ThreatFox ZIP and GeoIP files are
-reused inside the containers. The `/check` cache TTL is `CHECK_CACHE_TTL_SECONDS` (300 by
-default) and the API limits are `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_LOGS_PER_MINUTE`
-(120/5). For local development you can run only the infrastructure and start the worker and
-Beat yourself:
+The API is on `http://localhost:8000`. Beat schedules URLhaus every 60 minutes, ThreatFox
+daily at 00:30 UTC (the export quota resets at 00:00) and PhishTank every 6 hours. All are
+configurable in `.env` through `URLHAUS_INTERVAL_MINUTES`, `THREATFOX_SCHEDULE_HOUR`,
+`THREATFOX_SCHEDULE_MINUTE` and `PHISHTANK_INTERVAL_HOURS`. The worker and Beat share `.cache/`
+through a bind mount, so the ThreatFox ZIP and GeoIP files are reused inside the containers. The
+`/check` cache TTL is `CHECK_CACHE_TTL_SECONDS` (300 by default) and the API limits are
+`RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_LOGS_PER_MINUTE` (120/5). For local development you can run
+only the infrastructure and start the worker and Beat yourself:
 
 ```bash
 uv run celery -A threatfeed.celery_app worker --loglevel=INFO
@@ -204,7 +208,9 @@ uv run python -c "from threatfeed.tasks import ingest_feed; ingest_feed.delay('u
 Both abuse.ch feeds need a free key from [auth.abuse.ch](https://auth.abuse.ch/), set as
 `ABUSECH_AUTH_KEY` in `.env` (`URLHAUS_AUTH_KEY` is still accepted as the old name). The key
 travels in the URL path and is redacted from logs. `URLHAUS_EXPORT` selects the URLhaus file
-(`recent.csv` by default); other exports are named in your abuse.ch account.
+(`recent.csv` by default); other exports are named in your abuse.ch account. PhishTank needs no
+key; its data is published by OpenDNS/Cisco Talos under
+[CC BY-SA 2.5](https://creativecommons.org/licenses/by-sa/2.5/), so keep the attribution.
 
 ThreatFox limits downloads to four times the export size per UTC day, counting partial
 transfers. The full ZIP is cached in `.cache/threatfeed/` for the current UTC day, so repeated
@@ -224,10 +230,10 @@ uv run python -m threatfeed.enrich
 New IPs are enriched during ingestion. The examples use DB-IP Lite (CC BY 4.0); GeoLite2 works
 through the same reader and only changes the paths.
 
-Today both ingestors run end to end, the distributed stack schedules them through Celery, the
+Today three ingestors run end to end, the distributed stack schedules them through Celery, the
 API serves `/check`, `/indicators`, `/stats`, `/analyze/logs` and `/health`, IPs carry country
-and ASN, `/check` is cached with versioned invalidation, and the API is rate limited. Phase 3 is
-complete.
+and ASN, `/check` is cached with versioned invalidation, and the API is rate limited. The three
+sources are URLhaus, ThreatFox and PhishTank.
 
 Development:
 
@@ -283,6 +289,8 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] Full Docker Compose: database, Redis, API, worker and Beat.
   - [x] Redis cache for `/check` with invalidation after each ingestion.
   - [x] Rate limiting.
+- [x] **Extensions.**
+  - [x] Third independent feed: PhishTank (verified online phishing URLs, every 6 h).
 
 ## Design decisions
 
@@ -319,6 +327,14 @@ Short version; detailed notes will grow with the project.
   IP and window. `X-Forwarded-For` is not trusted, so behind a reverse proxy the limit applies
   to the proxy address until trusted proxies are configured. A Redis outage allows requests:
   the limiter protects the service but must not become a new way to take it down.
+- **The third feed is PhishTank, not another abuse.ch export.** It is independently operated by
+  Cisco Talos/OpenDNS, provides verified online phishing URLs with submission and verification
+  dates, and is published under CC BY-SA 2.5. Only rows with `verified=yes` and `online=yes` are
+  accepted; non-compliant rows are malformed, not silently imported.
+- **The 2048-character value cap is enforced at ingestion.** The API and `classify_indicator`
+  already treat 2048 as the maximum; the shared ingestor now skips longer feed values instead of
+  letting them hit PostgreSQL's btree row limit. PhishTank contributes a handful of very long
+  redirect URLs; they are counted as malformed, not silently stored unqueryable.
 - **One `BaseIngestor`, two feeds.** Download and row mapping differ; batching, upsert,
   provenance, counters and the malformed-row guard are shared rather than copied.
 - **`/check` takes `?value=` and classifies it.** URLs contain `/` and `?`, so a path parameter

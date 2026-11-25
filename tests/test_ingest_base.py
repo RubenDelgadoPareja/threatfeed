@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from threatfeed.classification import MAX_VALUE_LENGTH
 from threatfeed.config import Settings
 from threatfeed.geoip import GeoInfo
 from threatfeed.ingest.base import BaseIngestor, ParsedIndicator
@@ -118,3 +119,17 @@ def test_ingest_enriches_ips_when_geoip_is_configured(db_session: Session) -> No
     assert enrichment is not None
     assert (enrichment.country_code, enrichment.asn) == ("ES", 123)
     assert run.indicators_new == 1
+
+
+def test_values_above_the_api_limit_are_skipped(db_session: Session) -> None:
+    ingestor = _ingestor(db_session)
+    long_value = "a" * (MAX_VALUE_LENGTH + 1)
+    body = '"value"\n' + "".join(f'"v{i}.example"\n' for i in range(20))
+    body += f'"{long_value}"\n'
+
+    with track_run(db_session, "stub") as run:
+        ingestor.ingest_rows(StringIO(body), run)
+
+    assert run.status == IngestStatus.SUCCEEDED
+    assert (run.rows_read, run.rows_skipped) == (21, 1)
+    assert run.indicators_new == 20

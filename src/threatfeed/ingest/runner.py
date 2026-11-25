@@ -7,10 +7,12 @@ from threatfeed.geoip import GeoLookup
 from threatfeed.ingest.base import BaseIngestor
 from threatfeed.ingest.errors import IngestError
 from threatfeed.ingest.locking import release_lock, try_lock
+from threatfeed.ingest.phishtank import PhishTankIngestor
 from threatfeed.ingest.threatfox import ThreatFoxIngestor
 from threatfeed.ingest.urlhaus import URLHausIngestor
 
 FEEDS: dict[str, type[BaseIngestor]] = {
+    "phishtank": PhishTankIngestor,
     "threatfox": ThreatFoxIngestor,
     "urlhaus": URLHausIngestor,
 }
