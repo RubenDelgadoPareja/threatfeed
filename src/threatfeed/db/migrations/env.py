@@ -9,11 +9,9 @@ import logging
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+import threatfeed.models  # noqa: F401  # registers every table on Base.metadata
 from threatfeed.config import get_settings
 from threatfeed.db.base import Base
-
-# Task 2 adds `import threatfeed.models` here, so every table registers on Base.metadata
-# before autogenerate compares it against the live schema.
 
 # No alembic.ini => no fileConfig(); a minimal setup keeps "Running upgrade ..." messages visible.
 logging.basicConfig(level=logging.INFO, format="%(levelname)-5.5s [%(name)s] %(message)s")
