@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from threatfeed.config import Settings
 
 # `_env_file=None` keeps the tests independent from whatever `.env` the developer has locally.
@@ -24,3 +27,8 @@ def test_database_url_escapes_password() -> None:
         settings.database_url
         == "postgresql+psycopg://threatfeed:p%40ss%3Aw%2Frd@localhost:5432/threatfeed"
     )
+
+
+def test_urlhaus_export_cannot_escape_the_export_path() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, urlhaus_export="../../etc/passwd")

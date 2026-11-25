@@ -1,0 +1,10 @@
+# URLhaus Database Dump (CSV)
+# This is a fixture excerpt: comments, a header and a handful of data rows.
+# Do not edit by hand; keep it small and representative.
+"id","dateadded","url","url_status","last_online","threat","tags","urlhaus_link","reporter"
+"1","2026-03-01 10:00:00","HTTP://Example.COM:80/a?b=1#frag","online","2026-03-02","malware_download","elf,mirai","https://urlhaus.abuse.ch/url/1/","abuse_ch"
+"2","2026-02-01 00:00:00","https://bad.test/payload.exe","offline","","malware_download","exe","https://urlhaus.abuse.ch/url/2/","anonymous"
+"3","2026-02-01 00:00:00","ftp://bad.test/file","online","2026-02-02","malware_download","","https://urlhaus.abuse.ch/url/3/","anonymous"
+"4","2026-02-03 12:30:00","https://quoted.test/a,b?c=d","online","2026-02-04","malware_download","tag with space,exe","https://urlhaus.abuse.ch/url/4/","anon"
+"5","","https://nodate.test/x","online","","malware_download","","https://urlhaus.abuse.ch/url/5/","anon"
+# END 5 entries
