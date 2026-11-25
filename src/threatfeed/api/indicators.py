@@ -35,7 +35,7 @@ def check_indicator(
 
     indicator = db.scalar(
         select(Indicator)
-        .options(selectinload(Indicator.sources))
+        .options(selectinload(Indicator.sources), selectinload(Indicator.geo))
         .where(Indicator.type == indicator_type, Indicator.value == normalized)
     )
     if indicator is None:
@@ -57,7 +57,7 @@ def list_indicators(
     total = db.scalar(select(func.count()).select_from(Indicator).where(*filters)) or 0
     items = db.scalars(
         select(Indicator)
-        .options(selectinload(Indicator.sources))
+        .options(selectinload(Indicator.sources), selectinload(Indicator.geo))
         .where(*filters)
         .order_by(Indicator.last_seen.desc(), Indicator.id.desc())
         .limit(limit)

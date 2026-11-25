@@ -6,6 +6,7 @@ import sys
 
 from threatfeed.config import get_settings
 from threatfeed.db.session import get_session_factory
+from threatfeed.geoip import GeoIP
 from threatfeed.ingest.errors import IngestError
 from threatfeed.ingest.threatfox import ThreatFoxIngestor
 from threatfeed.ingest.urlhaus import URLHausIngestor
@@ -41,12 +42,18 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)-5.5s [%(name)s] %(message)s")
     logger = logging.getLogger("threatfeed.ingest")
 
+    geoip = None
     try:
+        settings = get_settings()
+        geoip = GeoIP.from_settings(settings)
         with get_session_factory()() as session:
-            FEEDS[args.feed](session, get_settings()).run(limit=args.limit)
+            FEEDS[args.feed](session, settings, geoip).run(limit=args.limit)
     except IngestError as exc:
         logger.error("%s", exc)
         return 1
+    finally:
+        if geoip is not None:
+            geoip.close()
 
     return 0
 

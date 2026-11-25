@@ -3,11 +3,23 @@
 from sqlalchemy import UniqueConstraint
 
 from threatfeed.db.base import Base
-from threatfeed.models import Indicator, IndicatorSource, IndicatorType, IngestRun, IngestStatus
+from threatfeed.models import (
+    Indicator,
+    IndicatorSource,
+    IndicatorType,
+    IngestRun,
+    IngestStatus,
+    IPEnrichment,
+)
 
 
 def test_metadata_registers_every_table() -> None:
-    assert set(Base.metadata.tables) == {"indicators", "indicator_sources", "ingest_runs"}
+    assert set(Base.metadata.tables) == {
+        "indicators",
+        "indicator_sources",
+        "ingest_runs",
+        "ip_enrichment",
+    }
 
 
 def test_constraints_follow_the_naming_convention() -> None:
@@ -56,4 +68,11 @@ def test_ids_default_to_uuidv7_in_the_database() -> None:
 def test_deleting_an_indicator_cascades_to_its_sources() -> None:
     foreign_key = next(iter(IndicatorSource.__table__.c.indicator_id.foreign_keys))
 
+    assert foreign_key.ondelete == "CASCADE"
+
+
+def test_ip_enrichment_is_one_to_one_and_cascades() -> None:
+    foreign_key = next(iter(IPEnrichment.__table__.c.indicator_id.foreign_keys))
+
+    assert IPEnrichment.__table__.primary_key.name == "pk_ip_enrichment"
     assert foreign_key.ondelete == "CASCADE"

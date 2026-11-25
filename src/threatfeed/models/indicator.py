@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
@@ -60,6 +61,12 @@ class Indicator(Base):
         passive_deletes=True,
         order_by="IndicatorSource.feed",
     )
+    geo: Mapped["IPEnrichment | None"] = relationship(
+        back_populates="indicator",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
 
 
 class IndicatorSource(Base):
@@ -82,3 +89,27 @@ class IndicatorSource(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     indicator: Mapped[Indicator] = relationship(back_populates="sources")
+
+
+class IPEnrichment(Base):
+    """GeoIP and ASN data for an IP indicator, filled at ingestion or by the backfill command.
+
+    A separate table keeps the four nullable columns out of the 190k non-IP indicators.
+    """
+
+    __tablename__ = "ip_enrichment"
+
+    indicator_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("indicators.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    country_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    asn: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    as_org: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enriched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    indicator: Mapped[Indicator] = relationship(back_populates="geo")

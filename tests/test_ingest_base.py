@@ -6,10 +6,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from threatfeed.config import Settings
+from threatfeed.geoip import GeoInfo
 from threatfeed.ingest.base import BaseIngestor, ParsedIndicator
 from threatfeed.ingest.errors import IngestError, InvalidRow
 from threatfeed.ingest.run import track_run
-from threatfeed.models import Indicator, IndicatorSource, IndicatorType, IngestStatus
+from threatfeed.models import (
+    Indicator,
+    IndicatorSource,
+    IndicatorType,
+    IngestStatus,
+    IPEnrichment,
+)
 
 
 class StubIngestor(BaseIngestor):
@@ -33,6 +40,24 @@ class StubIngestor(BaseIngestor):
 
 def _ingestor(session: Session) -> StubIngestor:
     return StubIngestor(session, Settings(_env_file=None))
+
+
+class IPStubIngestor(StubIngestor):
+    feed = "ipstub"
+
+    def parse_row(self, row: dict[str, str | None], now: datetime) -> ParsedIndicator:
+        return ParsedIndicator(
+            type=IndicatorType.IP,
+            value=(row.get("value") or "").strip(),
+            first_seen=now,
+            last_seen=now,
+            raw=dict(row),
+        )
+
+
+class FakeGeo:
+    def lookup(self, ip: str) -> GeoInfo | None:
+        return GeoInfo(country_code="ES", country_name="Spain", asn=123, as_org="Example Net")
 
 
 def test_ingest_rows_stores_indicators_and_provenance(db_session: Session) -> None:
@@ -80,3 +105,16 @@ def test_expected_skips_do_not_fail_the_run(db_session: Session) -> None:
     assert run.status == IngestStatus.SUCCEEDED
     assert (run.rows_read, run.rows_skipped) == (3, 1)
     assert run.indicators_new == 2
+
+
+def test_ingest_enriches_ips_when_geoip_is_configured(db_session: Session) -> None:
+    ingestor = IPStubIngestor(db_session, Settings(_env_file=None), FakeGeo())
+
+    with track_run(db_session, "ipstub") as run:
+        ingestor.ingest_rows(StringIO('"value"\n"1.2.3.4"\n'), run)
+
+    indicator = db_session.scalars(select(Indicator)).one()
+    enrichment = db_session.get(IPEnrichment, indicator.id)
+    assert enrichment is not None
+    assert (enrichment.country_code, enrichment.asn) == ("ES", 123)
+    assert run.indicators_new == 1

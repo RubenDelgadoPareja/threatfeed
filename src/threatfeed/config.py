@@ -1,6 +1,7 @@
 """Application settings, loaded from environment variables and `.env`."""
 
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote
 
 from pydantic import AliasChoices, Field
@@ -25,6 +26,10 @@ class Settings(BaseSettings):
     )
     # Export filename inside the URLhaus v2 files API. Restricted: the key goes in the same path.
     urlhaus_export: str = Field(default="recent.csv", pattern=r"^[a-z0-9_]+\.csv$")
+
+    # Optional GeoIP databases (MaxMind GeoLite2 or DB-IP Lite). Absent means no enrichment.
+    geoip_country_db: Path | None = None
+    geoip_asn_db: Path | None = None
 
     @property
     def database_url(self) -> str:

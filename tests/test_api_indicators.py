@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
-from threatfeed.models import Indicator
+from threatfeed.models import Indicator, IPEnrichment
 
 
 def test_check_normalizes_urls_and_returns_provenance(
@@ -20,7 +21,34 @@ def test_check_normalizes_urls_and_returns_provenance(
     assert body["confidence"]["score"] == 70
     assert body["confidence"]["level"] == "medium"
     assert "2 sources agree" in body["confidence"]["reasons"]
+    assert body["geo"] is None
     assert "raw" not in body
+
+
+def test_check_includes_geo_for_enriched_ips(
+    api_client: TestClient, seeded_indicators: list[Indicator], db_session: Session
+) -> None:
+    ip = seeded_indicators[1]
+    db_session.add(
+        IPEnrichment(
+            indicator_id=ip.id,
+            country_code="ES",
+            country_name="Spain",
+            asn=123,
+            as_org="Example Net",
+        )
+    )
+    db_session.flush()
+
+    response = api_client.get("/check", params={"value": "1.2.3.4"})
+
+    assert response.status_code == 200
+    assert response.json()["geo"] == {
+        "country_code": "ES",
+        "country_name": "Spain",
+        "asn": 123,
+        "as_org": "Example Net",
+    }
 
 
 def test_check_finds_ips(api_client: TestClient, seeded_indicators: list[Indicator]) -> None:

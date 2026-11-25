@@ -90,7 +90,7 @@ def _match_chunk(
 
     rows = db.scalars(
         select(Indicator)
-        .options(selectinload(Indicator.sources))
+        .options(selectinload(Indicator.sources), selectinload(Indicator.geo))
         .where(tuple_(Indicator.type, Indicator.value).in_(list(pairs)))
     ).all()
     by_key = {(indicator.type, indicator.value): indicator for indicator in rows}

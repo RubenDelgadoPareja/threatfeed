@@ -10,8 +10,8 @@
 > normalizes and deduplicates them into PostgreSQL, and answers one question over a REST API:
 > **"Is this IP / domain / URL / hash known to be malicious? Who says so, and since when?"**
 
-**Status:** phase 1 (backend) complete; phase 2 in progress (confidence score and log analysis
-done; GeoIP next). See the [roadmap](#roadmap).
+**Status:** phase 2 (applied security) complete; phase 3 (distributed) next. See the
+[roadmap](#roadmap).
 
 ## Why
 
@@ -91,6 +91,12 @@ implicitly: a truncated download must not wipe provenance, and the dumps are rol
 audit trail of every ingestion; the row is written as `running` before the feed is touched, so
 a crash leaves evidence.
 
+**`ip_enrichment`**: 1:1 with an IP indicator (`indicator_id` is PK and FK with
+`ON DELETE CASCADE`). Columns: `country_code`, `country_name`, `asn`, `as_org`, `enriched_at`.
+Filled at ingestion and by `python -m threatfeed.enrich`; absent for non-IP indicators and for
+IPs without a GeoIP hit. Keeping it separate avoids four nullable columns on every domain, URL
+and hash.
+
 ## API
 
 | Endpoint | Purpose |
@@ -108,6 +114,8 @@ newest first), and `/stats` returns `{total, by_type, by_source}` with every typ
 
 Both indicator endpoints include `confidence: {score, level, reasons}`: how many distinct feeds
 report the indicator plus how fresh the latest report is. It is computed on read, never stored.
+They also include `geo: {country_code, country_name, asn, as_org}` for enriched IP indicators,
+and `null` for everything else.
 
 ### Log analysis
 
@@ -132,6 +140,7 @@ capped at 10 MB (413 above that) and at 100 matches by default (max 1000).
 | Web framework | FastAPI | Type-driven validation with Pydantic, OpenAPI for free, async-ready |
 | ORM / migrations | SQLAlchemy 2 (sync) + Alembic | Explicit SQL model, versioned schema changes |
 | Database | PostgreSQL 18 | `jsonb`, `timestamptz`, native upsert |
+| GeoIP / ASN | `geoip2` + MMDB | Local lookups, no per-request network call; GeoLite2 or DB-IP Lite |
 | Driver | psycopg 3 | Modern, actively maintained Postgres driver |
 | Config | pydantic-settings | Typed settings from environment / `.env`, 12-factor style |
 | Tooling | uv · pytest · ruff | Fast, reproducible installs; tests; lint + format in one tool |
@@ -164,8 +173,19 @@ runs reuse it; on a cache miss and a 429 the run fails with the reset time. Add 
 ingest only the first N rows, and rely on the exit code: 0 if the run ended `succeeded`, 1 if it
 ended `failed`.
 
-Today both ingestors run end to end and the API serves `/check`, `/indicators`, `/stats` and
-`/health`; phase 1 is complete.
+GeoIP enrichment is optional. Download the MMDB files — [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
+or [DB-IP Lite](https://db-ip.com/) — set `GEOIP_COUNTRY_DB` and `GEOIP_ASN_DB` in `.env`, and
+backfill the IPs already stored:
+
+```bash
+uv run python -m threatfeed.enrich
+```
+
+New IPs are enriched during ingestion. The examples use DB-IP Lite (CC BY 4.0); GeoLite2 works
+through the same reader and only changes the paths.
+
+Today both ingestors run end to end, the API serves `/check`, `/indicators`, `/stats`,
+`/analyze/logs` and `/health`, and IPs carry country and ASN.
 
 Development:
 
@@ -183,10 +203,13 @@ src/threatfeed/
 ├── classification.py   # infer the type of an incoming value and normalize it
 ├── normalize.py        # URL canonicalization shared by ingestion and lookups
 ├── logs.py             # nginx combined log parser
+├── geoip.py            # MMDB readers (GeoLite2 / DB-IP Lite)
+├── enrichment.py       # persistence of geo rows
 ├── db/                 # declarative base, engine/session, Alembic migrations
 ├── models/             # SQLAlchemy models
 ├── schemas/            # Pydantic response schemas
 ├── ingest/             # BaseIngestor, CSV/HTTP helpers, one module per feed
+├── enrich/             # GeoIP backfill CLI
 └── api/                # routers
 tests/
 ├── fixtures/           # real CSV excerpts
@@ -204,11 +227,11 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] REST API: `/check`, `/indicators`, `/stats`.
   - [x] ThreatFox ingestor on a shared `BaseIngestor`.
   - [x] Tests: parser fixtures from real CSV excerpts, API against a test database.
-- [ ] **Phase 2: applied security.**
+- [x] **Phase 2: applied security.**
   - [x] Multi-source confidence score on `/check` and `/indicators`.
   - [x] `POST /analyze/logs` to match an nginx access log against the indicators, parsed as a
     stream.
-  - [ ] GeoIP / ASN enrichment (MaxMind GeoLite2).
+  - [x] GeoIP / ASN enrichment (MaxMind GeoLite2 or DB-IP Lite).
 - [ ] **Phase 3: distributed.** Celery + Redis scheduled ingestion with parallel workers ·
   retries with exponential backoff · rate limiting · idempotent tasks · Redis cache for `/check`
   with invalidation after each ingestion · full Docker Compose.
@@ -246,6 +269,9 @@ Short version; detailed notes will grow with the project.
 - **Log matching is conservative.** Only the client IP and absolute URLs in the request/referer
   are looked up; an origin-form path has no host, and inventing one would create false positives.
   Observables are queried in batches of 500 lines, and uploads are capped at 10 MB.
+- **GeoIP lives in its own optional table.** `ip_enrichment` is 1:1 with IP indicators; non-IPs
+  and IPs without a hit have no row. It is filled at ingestion and by an idempotent backfill, so
+  refreshing the MMDB is a re-run rather than a migration.
 - **Synchronous SQLAlchemy.** FastAPI runs plain `def` endpoints in a threadpool, so sync database
   calls do not block the event loop, and the phase 3 Celery workers are synchronous anyway.
   Async would add complexity without a measurable gain at this scale.
@@ -265,6 +291,7 @@ Short version; detailed notes will grow with the project.
 | False positive | Flagging something legitimate as malicious |
 | Normalization | Reducing each indicator to a canonical form so that equal indicators compare equal |
 | Confidence | How strongly the stored sources agree that an indicator is malicious, weighted by freshness |
+| ASN | Autonomous System Number: the network that announces an IP range |
 
 ---
 

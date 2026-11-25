@@ -13,6 +13,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from threatfeed.config import Settings
+from threatfeed.enrichment import upsert_ip_enrichment
+from threatfeed.geoip import GeoLookup
 from threatfeed.ingest.csv import iter_rows
 from threatfeed.ingest.errors import IngestError
 from threatfeed.ingest.run import track_run
@@ -43,9 +45,12 @@ class BaseIngestor:
     max_unexpected_ratio: ClassVar[float] = 0.10
     skip_sample_size: ClassVar[int] = 10
 
-    def __init__(self, session: Session, settings: Settings) -> None:
+    def __init__(
+        self, session: Session, settings: Settings, geoip: GeoLookup | None = None
+    ) -> None:
         self.session = session
         self.settings = settings
+        self.geoip = geoip
 
     def validate(self) -> None:
         """Fail before opening a run when the feed cannot be consumed (e.g. missing key)."""
@@ -124,6 +129,10 @@ class BaseIngestor:
         for item in batch:
             indicator_id, inserted = self._upsert_indicator(item)
             self._upsert_source(indicator_id, item)
+            if item.type is IndicatorType.IP and self.geoip is not None:
+                info = self.geoip.lookup(item.value)
+                if info is not None:
+                    upsert_ip_enrichment(self.session, indicator_id, info)
             if inserted:
                 run.indicators_new += 1
             else:

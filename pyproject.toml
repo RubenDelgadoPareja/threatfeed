@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "alembic>=1.19.2",
     "python-multipart>=0.0.34",
+    "geoip2>=5.4.0",
 ]
 [dependency-groups]
 dev = [
