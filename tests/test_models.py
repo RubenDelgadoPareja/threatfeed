@@ -15,6 +15,7 @@ from threatfeed.models import (
 
 def test_metadata_registers_every_table() -> None:
     assert set(Base.metadata.tables) == {
+        "api_keys",
         "indicators",
         "indicator_sources",
         "ingest_runs",

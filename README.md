@@ -121,18 +121,38 @@ report the indicator plus how fresh the latest report is. It is computed on read
 They also include `geo: {country_code, country_name, asn, as_org}` for enriched IP indicators,
 and `null` for everything else.
 
+Every endpoint except `/health` requires a bearer key:
+
+```bash
+uv run python -m threatfeed.keys create --name reporting
+# Created API key "reporting" (prefix tf_ab12cd34).
+# Copy it now: it will not be shown again.
+
+curl -H "Authorization: Bearer tf_..." "http://localhost:8000/check?value=1.1.1.1"
+```
+
+The database stores only a SHA-256 hash and a short prefix, so a dump cannot be replayed.
+`python -m threatfeed.keys list` shows prefixes, status, creation, last use and expiry;
+`revoke <prefix>` disables a key immediately. Unknown, revoked and expired keys all get the same
+`401 invalid API key`, with `WWW-Authenticate: Bearer`. `/docs`, `/openapi.json` and `/health`
+stay public: they describe the API or prove liveness. Keys travel in a header, so the API must be
+served over TLS by a reverse proxy; the app does not terminate TLS itself.
+
 `/check` is cached in Redis under a versioned namespace. Every ingestion increments the version
 key, so invalidation is O(1) and does not need a `SCAN`; old entries expire by TTL (300 s by
 default). Hits and negative lookups are both cached. If Redis is unavailable, the endpoint falls
 back to PostgreSQL and only logs a warning.
 
-Rate limits are per client IP in fixed one-minute windows: `/check`, `/indicators` and `/stats`
-share **120 req/min**, while `/analyze/logs` gets **5 req/min**. Responses carry
-`X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; a 429 carries
-`Retry-After`. Both limits are configurable (`RATE_LIMIT_PER_MINUTE`,
-`RATE_LIMIT_LOGS_PER_MINUTE`). `/health`, `/docs` and `/openapi.json` are exempt. The client is
-`request.client.host`: behind a reverse proxy every client may share the proxy's address, and
-`X-Forwarded-For` is deliberately not trusted. If Redis is down, requests are allowed.
+Rate limits are per API key in fixed one-minute windows: `/check`, `/indicators` and `/stats`
+share **120 req/min**, while `/analyze/logs` gets **5 req/min**. A second, looser counter per
+client IP (twice the key quota) stops one host from rotating through many keys. Failed
+authentication attempts are capped at **10 per minute per IP** (`AUTH_FAILURE_PER_MINUTE`) and
+return 429. Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
+`X-RateLimit-Reset`; a 429 carries `Retry-After`. The limits are configurable
+(`RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_LOGS_PER_MINUTE`). `/health`, `/docs` and
+`/openapi.json` are unauthenticated and exempt. The client is `request.client.host`: behind a
+reverse proxy every client may share the proxy's address, and `X-Forwarded-For` is deliberately
+not trusted. If Redis is down, requests are allowed.
 
 ### Log analysis
 
@@ -140,7 +160,8 @@ share **120 req/min**, while `/analyze/logs` gets **5 req/min**. Responses carry
 line, looking up observables in batches of 500 lines:
 
 ```bash
-curl -F "file=@access.log" "http://localhost:8000/analyze/logs?max_matches=10"
+curl -H "Authorization: Bearer tf_..." \
+  -F "file=@access.log" "http://localhost:8000/analyze/logs?max_matches=10"
 ```
 
 It extracts the **client IP** and **absolute URLs** found in the request and the referer. An
@@ -301,6 +322,7 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
   - [x] Rate limiting.
 - [x] **Extensions.**
   - [x] Third independent feed: PhishTank (verified online phishing URLs, every 6 h).
+  - [x] API keys: hashed at rest, revocable, with per-key rate limits.
 
 ## Design decisions
 
@@ -333,10 +355,15 @@ Short version; detailed notes will grow with the project.
 - **The `/check` cache is versioned, not scanned.** Each ingestion increments a version key and
   entries are namespaced by it, so invalidation is O(1) and old keys expire by TTL. Negative
   lookups are cached too; a Redis outage falls back to PostgreSQL instead of failing the API.
-- **Rate limits are fixed-window and fail-open.** One-minute counters in Redis, keyed by client
-  IP and window. `X-Forwarded-For` is not trusted, so behind a reverse proxy the limit applies
-  to the proxy address until trusted proxies are configured. A Redis outage allows requests:
-  the limiter protects the service but must not become a new way to take it down.
+- **Rate limits are fixed-window and fail-open.** One-minute counters in Redis, keyed by API key
+  and window, plus a looser per-IP backstop. `X-Forwarded-For` is not trusted, so behind a
+  reverse proxy the IP guard applies to the proxy address until trusted proxies are configured.
+  A Redis outage allows requests: the limiter protects the service but must not become a new way
+  to take it down.
+- **API keys are stored hashed, never encrypted or in clear.** The token has 256 bits of
+  entropy, so SHA-256 is enough; bcrypt would only slow every request. The CLI prints the secret
+  once, the database keeps a hash and a 12-character prefix, and revocation is immediate. Keys
+  carry the primary quota; the IP limit stays as a backstop for one host cycling through keys.
 - **The third feed is PhishTank, not another abuse.ch export.** It is independently operated by
   Cisco Talos/OpenDNS, provides verified online phishing URLs with submission and verification
   dates, and is published under CC BY-SA 2.5. Only rows with `verified=yes` and `online=yes` are

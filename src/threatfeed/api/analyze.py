@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session, selectinload
 
-from threatfeed.api.rate_limit import logs_rate_limit
+from threatfeed.api.auth import logs_rate_limit
 from threatfeed.db.session import get_db
 from threatfeed.logs import Observable, parse_line
 from threatfeed.models import Indicator

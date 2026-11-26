@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     check_cache_ttl_seconds: int = Field(default=300, ge=1)
     rate_limit_per_minute: int = Field(default=120, ge=1)
     rate_limit_logs_per_minute: int = Field(default=5, ge=1)
+    auth_failure_per_minute: int = Field(default=10, ge=1)
     urlhaus_interval_minutes: int = Field(default=60, ge=1)
     phishtank_interval_hours: int = Field(default=6, ge=1)
     threatfox_schedule_hour: int = Field(default=0, ge=0, le=23)

@@ -8,10 +8,10 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Annotated, Protocol
+from typing import Protocol
 
 import redis
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Request
 from redis.exceptions import RedisError
 
 from threatfeed.config import get_settings
@@ -40,6 +40,7 @@ class RateLimitResult:
 class RateLimits:
     default_per_minute: int
     logs_per_minute: int
+    auth_failure_per_minute: int
 
 
 class RateLimiter:
@@ -88,63 +89,9 @@ def get_rate_limits() -> RateLimits:
     return RateLimits(
         default_per_minute=settings.rate_limit_per_minute,
         logs_per_minute=settings.rate_limit_logs_per_minute,
+        auth_failure_per_minute=settings.auth_failure_per_minute,
     )
 
 
-def _client_ip(request: Request) -> str:
+def client_ip(request: Request) -> str:
     return request.client.host if request.client is not None else "unknown"
-
-
-def _enforce(
-    request: Request,
-    response: Response,
-    limiter: RateLimiter,
-    *,
-    scope: str,
-    limit: int,
-) -> None:
-    result = limiter.check(scope, _client_ip(request), limit)
-    response.headers["X-RateLimit-Limit"] = str(result.limit)
-    response.headers["X-RateLimit-Remaining"] = str(result.remaining)
-    response.headers["X-RateLimit-Reset"] = str(result.retry_after)
-    if not result.allowed:
-        raise HTTPException(
-            status_code=429,
-            detail="rate limit exceeded",
-            headers={
-                "Retry-After": str(result.retry_after),
-                "X-RateLimit-Limit": str(result.limit),
-                "X-RateLimit-Remaining": str(result.remaining),
-                "X-RateLimit-Reset": str(result.retry_after),
-            },
-        )
-
-
-def default_rate_limit(
-    request: Request,
-    response: Response,
-    limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
-    limits: Annotated[RateLimits, Depends(get_rate_limits)],
-) -> None:
-    _enforce(
-        request,
-        response,
-        limiter,
-        scope="default",
-        limit=limits.default_per_minute,
-    )
-
-
-def logs_rate_limit(
-    request: Request,
-    response: Response,
-    limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
-    limits: Annotated[RateLimits, Depends(get_rate_limits)],
-) -> None:
-    _enforce(
-        request,
-        response,
-        limiter,
-        scope="logs",
-        limit=limits.logs_per_minute,
-    )

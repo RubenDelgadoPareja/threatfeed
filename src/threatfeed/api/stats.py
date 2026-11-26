@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from threatfeed.api.rate_limit import default_rate_limit
+from threatfeed.api.auth import default_rate_limit
 from threatfeed.db.session import get_db
 from threatfeed.models import Indicator, IndicatorSource, IndicatorType
 from threatfeed.schemas.stats import StatsOut

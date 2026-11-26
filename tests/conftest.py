@@ -20,6 +20,7 @@ from threatfeed.cache import CheckCache, get_check_cache
 from threatfeed.config import get_settings
 from threatfeed.db.base import Base
 from threatfeed.db.session import get_db
+from threatfeed.keys.service import create_key
 from threatfeed.main import app
 from threatfeed.models import Indicator, IndicatorSource, IndicatorType
 
@@ -128,17 +129,22 @@ def check_cache() -> CheckCache:
 
 
 @pytest.fixture
-def api_client(db_session: Session, check_cache: CheckCache) -> Iterator[TestClient]:
-    """HTTP client whose dependencies return test doubles and high rate limits."""
+def api_client(
+    db_session: Session, check_cache: CheckCache, api_token: str
+) -> Iterator[TestClient]:
+    """Authenticated HTTP client whose dependencies return test doubles and high limits."""
+    _install_overrides(db_session, check_cache)
+    try:
+        with TestClient(app, headers={"Authorization": f"Bearer {api_token}"}) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
 
-    def override_get_db() -> Iterator[Session]:
-        yield db_session
 
-    limiter = RateLimiter(FakeRateRedis())
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[get_check_cache] = lambda: check_cache
-    app.dependency_overrides[get_rate_limiter] = lambda: limiter
-    app.dependency_overrides[get_rate_limits] = lambda: RateLimits(10_000, 10_000)
+@pytest.fixture
+def anonymous_client(db_session: Session, check_cache: CheckCache) -> Iterator[TestClient]:
+    """Same overrides as `api_client`, without credentials."""
+    _install_overrides(db_session, check_cache)
     try:
         with TestClient(app) as c:
             yield c
@@ -147,8 +153,25 @@ def api_client(db_session: Session, check_cache: CheckCache) -> Iterator[TestCli
 
 
 @pytest.fixture
+def api_token(db_session: Session) -> str:
+    _, token = create_key(db_session, name="tests")
+    return token
+
+
+def _install_overrides(db_session: Session, check_cache: CheckCache) -> None:
+    def override_get_db() -> Iterator[Session]:
+        yield db_session
+
+    limiter = RateLimiter(FakeRateRedis())
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_check_cache] = lambda: check_cache
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_rate_limits] = lambda: RateLimits(10_000, 10_000, 10_000)
+
+
+@pytest.fixture
 def limited_client(api_client: TestClient) -> Iterator[TestClient]:
-    app.dependency_overrides[get_rate_limits] = lambda: RateLimits(1, 1)
+    app.dependency_overrides[get_rate_limits] = lambda: RateLimits(1, 1, 1)
     yield api_client
 
 

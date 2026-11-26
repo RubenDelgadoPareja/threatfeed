@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from threatfeed.api.rate_limit import default_rate_limit
+from threatfeed.api.auth import default_rate_limit
 from threatfeed.cache import CheckCache, get_check_cache
 from threatfeed.classification import MAX_VALUE_LENGTH, InvalidIndicator, classify_indicator
 from threatfeed.db.session import get_db
