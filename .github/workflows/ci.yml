@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The app reads one set of variables (pydantic-settings), the same ones docker-compose uses.
+# None of them is a secret: the tests never download a feed or open a GeoIP database.
+env:
+  POSTGRES_USER: threatfeed
+  POSTGRES_PASSWORD: threatfeed
+  POSTGRES_DB: threatfeed
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://localhost:6379/0
+  # conftest skips database tests when PostgreSQL is unreachable, which keeps local runs
+  # convenient but would let CI go green without testing anything. This turns that into a failure.
+  THREATFEED_REQUIRE_DB: "1"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # The lock file must match pyproject.toml, or the image build and the tests disagree.
+      - run: uv lock --check
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: threatfeed
+          POSTGRES_PASSWORD: threatfeed
+          POSTGRES_DB: threatfeed
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U threatfeed -d threatfeed"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      # Migrations run against the real schema, so a model change without a migration fails here.
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run pytest -q
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

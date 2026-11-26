@@ -1,3 +1,4 @@
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
@@ -90,6 +91,10 @@ def test_engine() -> Iterator[Engine]:
             if not exists:
                 connection.execute(sql.SQL("create database {}").format(sql.Identifier(test_db)))
     except psycopg.OperationalError as exc:
+        # Locally a missing database is a convenience (non-DB tests still run); in CI it would
+        # turn a broken service or credentials into a green run with zero database coverage.
+        if os.environ.get("THREATFEED_REQUIRE_DB") == "1":
+            pytest.fail(f"PostgreSQL is required but unreachable: {exc}")
         pytest.skip(f"PostgreSQL is not reachable, skipping database tests: {exc}")
 
     engine = create_engine(make_url(settings.database_url).set(database=test_db))

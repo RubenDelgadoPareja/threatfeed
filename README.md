@@ -1,5 +1,7 @@
 # ThreatFeed
 
+[![CI](https://github.com/RubenDelgadoPareja/threatfeed/actions/workflows/ci.yml/badge.svg)](https://github.com/RubenDelgadoPareja/threatfeed/actions/workflows/ci.yml)
+
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
@@ -241,6 +243,14 @@ Development:
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
+
+Database tests skip themselves when PostgreSQL is unreachable. Set `THREATFEED_REQUIRE_DB=1`
+to turn that skip into a failure; CI sets it so a missing database can never look green.
+
+CI (`.github/workflows/ci.yml`) runs three jobs on every push to `develop` and every pull
+request: `lint` (lock file, ruff check, ruff format), `test` (migrations, `alembic check`,
+pytest against PostgreSQL 18) and `docker` (image build, no push). Dependabot opens one
+grouped weekly PR for action updates.
 
 ## Project layout
 
