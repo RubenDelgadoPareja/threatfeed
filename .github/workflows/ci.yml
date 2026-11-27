@@ -78,6 +78,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
+      # Compose requires the env file named by `env_file`; the example has sane defaults.
+      - run: cp .env.example .env
+      - run: docker compose --profile proxy config -q
       - uses: docker/setup-buildx-action@v4.4.1
       - uses: docker/build-push-action@v7.4.0
         with:

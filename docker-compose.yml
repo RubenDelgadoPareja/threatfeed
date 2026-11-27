@@ -1,4 +1,5 @@
 # Local development environment: database, broker, API, worker and scheduler.
+# The optional `proxy` profile adds Caddy as the TLS terminator (the only public port).
 services:
   db:
     image: postgres:18-alpine
@@ -7,7 +8,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-threatfeed}
       POSTGRES_DB: ${POSTGRES_DB:-threatfeed}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Localhost only: the database has no auth beyond its password and nothing outside the
+      # host needs to reach it.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       # INTERVIEW: a named volume survives `docker compose down`; only `down -v` wipes it.
       # postgres:18 moved its data VOLUME from /var/lib/postgresql/data to /var/lib/postgresql.
@@ -24,7 +27,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,12 +38,34 @@ services:
     build: .
     image: threatfeed:local
     restart: unless-stopped
+    user: "${THREATFEED_UID:-1000}:${THREATFEED_GID:-1000}"
     env_file: .env
     environment:
       POSTGRES_HOST: db
       REDIS_URL: redis://redis:6379/0
+      # Only Caddy may report the client address; see the `edge` network below. Empty would
+      # disable proxy headers entirely, which is right for a direct exposure.
+      TRUSTED_PROXIES: 172.28.0.2
     ports:
-      - "8000:8000"
+      # Localhost only. Public traffic goes through Caddy when the `proxy` profile is enabled.
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      default:
+      edge:
+        # Static, so the address Caddy gets below can never be allocated to the API first.
+        ipv4_address: 172.28.0.3
     depends_on:
       db:
         condition: service_healthy
@@ -51,6 +76,7 @@ services:
     build: .
     image: threatfeed:local
     restart: unless-stopped
+    user: "${THREATFEED_UID:-1000}:${THREATFEED_GID:-1000}"
     command: celery -A threatfeed.celery_app worker --loglevel=INFO --concurrency=2
     env_file: .env
     environment:
@@ -68,7 +94,11 @@ services:
     build: .
     image: threatfeed:local
     restart: unless-stopped
-    command: celery -A threatfeed.celery_app beat --loglevel=INFO
+    user: "${THREATFEED_UID:-1000}:${THREATFEED_GID:-1000}"
+    # The schedule file lives in /tmp because /app is read-only for the non-root user.
+    command: >-
+      celery -A threatfeed.celery_app beat --loglevel=INFO
+      --schedule=/tmp/celerybeat-schedule
     env_file: .env
     environment:
       POSTGRES_HOST: db
@@ -79,5 +109,37 @@ services:
       redis:
         condition: service_healthy
 
+  # Opt-in: `docker compose --profile proxy up -d`. Caddy terminates TLS and proxies to the API.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      THREATFEED_DOMAIN: ${THREATFEED_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge:
+        # A fixed address is what the API trusts; the edge subnet's gateway (.1) is not trusted.
+        ipv4_address: 172.28.0.2
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Caddy and the API only. Traffic from the host (published ports) never arrives from an
+  # address in this subnet, so a client cannot impersonate the proxy.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

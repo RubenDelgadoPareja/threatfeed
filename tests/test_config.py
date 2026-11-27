@@ -43,3 +43,18 @@ def test_abusech_key_accepts_the_old_and_new_env_names(monkeypatch: pytest.Monke
 
     monkeypatch.setenv("ABUSECH_AUTH_KEY", "new")
     assert Settings(_env_file=None).abusech_auth_key == "new"
+
+
+def test_trusted_proxies_are_empty_by_default() -> None:
+    assert Settings(_env_file=None).trusted_proxies == ""
+
+
+def test_trusted_proxies_are_normalized() -> None:
+    settings = Settings(_env_file=None, trusted_proxies=" 172.28.0.2 , 10.0.0.0/8 ,, ::1/128 ")
+
+    assert settings.trusted_proxies == "172.28.0.2,10.0.0.0/8,::1/128"
+
+
+def test_trusted_proxies_reject_garbage_at_startup() -> None:
+    with pytest.raises(ValidationError, match="trusted proxy"):
+        Settings(_env_file=None, trusted_proxies="localhost")

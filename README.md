@@ -150,9 +150,11 @@ authentication attempts are capped at **10 per minute per IP** (`AUTH_FAILURE_PE
 return 429. Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
 `X-RateLimit-Reset`; a 429 carries `Retry-After`. The limits are configurable
 (`RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_LOGS_PER_MINUTE`). `/health`, `/docs` and
-`/openapi.json` are unauthenticated and exempt. The client is `request.client.host`: behind a
-reverse proxy every client may share the proxy's address, and `X-Forwarded-For` is deliberately
-not trusted. If Redis is down, requests are allowed.
+`/openapi.json` are unauthenticated and exempt. The client is `request.client.host`.
+`X-Forwarded-For` and `X-Forwarded-Proto` are only believed when the peer is listed in
+`TRUSTED_PROXIES` (comma-separated IPs or CIDRs, empty by default); the shipped compose stack
+trusts only the Caddy container, so a client that reaches the API directly cannot forge its
+address. If Redis is down, requests are allowed.
 
 ### Log analysis
 
@@ -255,8 +257,9 @@ through the same reader and only changes the paths.
 
 Today three ingestors run end to end, the distributed stack schedules them through Celery, the
 API serves `/check`, `/indicators`, `/stats`, `/analyze/logs` and `/health`, IPs carry country
-and ASN, `/check` is cached with versioned invalidation, and the API is rate limited. The three
-sources are URLhaus, ThreatFox and PhishTank.
+and ASN, `/check` is cached with versioned invalidation, the API requires hashed API keys and is
+rate limited, and CI lints, tests and builds on every change. The three sources are URLhaus,
+ThreatFox and PhishTank.
 
 Development:
 
@@ -270,8 +273,47 @@ to turn that skip into a failure; CI sets it so a missing database can never loo
 
 CI (`.github/workflows/ci.yml`) runs three jobs on every push to `develop` and every pull
 request: `lint` (lock file, ruff check, ruff format), `test` (migrations, `alembic check`,
-pytest against PostgreSQL 18) and `docker` (image build, no push). Dependabot opens one
-grouped weekly PR for action updates.
+pytest against PostgreSQL 18) and `docker` (compose validation and image build, no push).
+Dependabot opens one grouped weekly PR for action updates.
+
+## Deployment
+
+Compose publishes only what cannot stay private: the API, PostgreSQL and Redis bind to
+`127.0.0.1`, so they are reachable from the host and from the containers, not from the network.
+To expose the API, add the `proxy` profile:
+
+```bash
+docker compose --profile proxy up -d --build
+```
+
+Caddy then listens on `80/443` and proxies to `api:8000`. For `THREATFEED_DOMAIN=localhost`
+(the default) it issues a certificate from its internal CA, so local clients get a warning
+until they trust it once:
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+# import caddy-root.crt into your OS/browser trust store, then:
+curl https://localhost/health
+```
+
+Set `THREATFEED_DOMAIN=feed.example.com` with DNS pointing at the host to get a Let's Encrypt
+certificate instead; nothing else changes.
+
+Proxy trust is explicit and minimal. Caddy gets the fixed address `172.28.0.2` on the `edge`
+network, the API `172.28.0.3`, and the API trusts only `172.28.0.2` (`TRUSTED_PROXIES`). An
+empty value disables proxy headers entirely, including uvicorn's default trust in
+`127.0.0.1`; `python -m threatfeed.serve` is what wires the setting to the server. Traffic
+arriving on the published `127.0.0.1:8000` port keeps its real peer address, so a forged
+`X-Forwarded-For` is ignored.
+
+All containers run as a non-root user, UID/GID `1000` by default (the usual Linux/WSL
+developer) because the worker writes the shared `.cache` bind mount. On a host where your user
+has another id, set `THREATFEED_UID`/`THREATFEED_GID` and make `.cache` writable by it. The API
+has a `healthcheck` on `/health`; Caddy waits for it and Compose reports `healthy`. Beat keeps
+its schedule in `/tmp` because `/app` is read-only for the non-root user.
+
+The API itself does not terminate TLS: keys travel in a header, so it must sit behind a TLS
+proxy as above.
 
 ## Project layout
 
@@ -323,6 +365,8 @@ docs/agents/            # conventions for coding agents: issue tracker, triage l
 - [x] **Extensions.**
   - [x] Third independent feed: PhishTank (verified online phishing URLs, every 6 h).
   - [x] API keys: hashed at rest, revocable, with per-key rate limits.
+  - [x] Deployment: Caddy TLS profile, minimal proxy trust, localhost-only ports, non-root
+    containers and an API healthcheck.
 
 ## Design decisions
 
@@ -364,6 +408,17 @@ Short version; detailed notes will grow with the project.
   entropy, so SHA-256 is enough; bcrypt would only slow every request. The CLI prints the secret
   once, the database keeps a hash and a 12-character prefix, and revocation is immediate. Keys
   carry the primary quota; the IP limit stays as a backstop for one host cycling through keys.
+- **Only the TLS proxy is public, and only it may report the client address.** The API,
+  PostgreSQL and Redis bind to `127.0.0.1`; Caddy publishes `80/443`. Caddy has the fixed address
+  `172.28.0.2` on a dedicated network, and that single address is the only trusted proxy. The
+  subnet gateway is deliberately excluded because traffic on published ports can arrive from it.
+- **Proxy trust lives in settings, not in server defaults.** uvicorn trusts `127.0.0.1` unless
+  told otherwise; `python -m threatfeed.serve` disables proxy headers when `TRUSTED_PROXIES` is
+  empty, so the safe behaviour is the default and the trusted peer is a reviewed value.
+- **Containers run as a non-root UID shared with the host.** UID/GID 1000 matches the usual
+  Linux/WSL developer, which keeps the `.cache` bind mount shared between the CLI and the worker
+  and avoids copying the cache into a volume. `THREATFEED_UID`/`THREATFEED_GID` cover other
+  hosts; Beat writes its schedule to `/tmp` so `/app` can stay read-only.
 - **The third feed is PhishTank, not another abuse.ch export.** It is independently operated by
   Cisco Talos/OpenDNS, provides verified online phishing URLs with submission and verification
   dates, and is published under CC BY-SA 2.5. Only rows with `verified=yes` and `online=yes` are

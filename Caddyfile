@@ -1,0 +1,7 @@
+# TLS termination and the only public service. `localhost` gets a certificate from Caddy's
+# internal CA (trust it once on the machine); a real domain gets one from Let's Encrypt as soon
+# as DNS points here and ports 80/443 are reachable.
+{$THREATFEED_DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}

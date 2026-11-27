@@ -1,10 +1,11 @@
 """Application settings, loaded from environment variables and `.env`."""
 
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,22 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(default=120, ge=1)
     rate_limit_logs_per_minute: int = Field(default=5, ge=1)
     auth_failure_per_minute: int = Field(default=10, ge=1)
+
+    # Comma-separated IPs or CIDRs whose X-Forwarded-For / X-Forwarded-Proto are believed.
+    # Empty means no proxy is trusted, not even localhost; the server disables proxy headers.
+    trusted_proxies: str = ""
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _validate_trusted_proxies(cls, value: str) -> str:
+        entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+        for entry in entries:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"invalid trusted proxy {entry!r}: {exc}") from exc
+        return ",".join(entries)
+
     urlhaus_interval_minutes: int = Field(default=60, ge=1)
     phishtank_interval_hours: int = Field(default=6, ge=1)
     threatfox_schedule_hour: int = Field(default=0, ge=0, le=23)
